@@ -62,9 +62,9 @@ def init_db():
     if bool(bootstrap_username) != bool(bootstrap_password):
         conn.close()
         raise RuntimeError('Set both INITIAL_ADMIN_USERNAME and INITIAL_ADMIN_PASSWORD to bootstrap the first admin.')
-    if bootstrap_username and len(bootstrap_password) < 12:
+    if bootstrap_username and len(bootstrap_password) < 3:
         conn.close()
-        raise RuntimeError('INITIAL_ADMIN_PASSWORD must contain at least 12 characters.')
+        raise RuntimeError('INITIAL_ADMIN_PASSWORD must contain at least 3 characters.')
     if bootstrap_username and not conn.execute('SELECT 1 FROM admins LIMIT 1').fetchone():
         cur=conn.execute('INSERT INTO admins(username,password_hash) VALUES(?,?)',(bootstrap_username,generate_password_hash(bootstrap_password)))
         conn.execute("INSERT INTO admin_roles(admin_id,role,department) VALUES(?,'super_admin','')",(cur.lastrowid,))
@@ -78,8 +78,8 @@ init_db()
 @click.option('--password', prompt=True, hide_input=True, confirmation_prompt=True)
 def create_admin(username, password):
     """Create the initial administrator without a built-in credential."""
-    if len(password) < 12:
-        raise click.ClickException('Use a password with at least 12 characters.')
+    if len(password) < 3:
+        raise click.ClickException('Use a password with at least 3 characters.')
     conn=sqlite3.connect(DB_PATH)
     try:
         cur=conn.execute('INSERT INTO admins(username,password_hash) VALUES(?,?)',(username.strip(),generate_password_hash(password)))
@@ -94,8 +94,8 @@ def create_admin(username, password):
 @click.option('--password', prompt=True, hide_input=True, confirmation_prompt=True)
 def set_admin_password(username, password):
     """Reset an existing administrator password."""
-    if len(password) < 12:
-        raise click.ClickException('Use a password with at least 12 characters.')
+    if len(password) < 3:
+        raise click.ClickException('Use a password with at least 3 characters.')
     conn=sqlite3.connect(DB_PATH)
     cur=conn.execute('UPDATE admins SET password_hash=? WHERE username=?',(generate_password_hash(password),username.strip()))
     conn.commit(); conn.close()

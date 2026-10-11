@@ -26,7 +26,7 @@ A Flask admin application for the existing YRC roster, event, attendance, and cr
    flask --app app create-admin
    ```
 
-   For an existing administrator, use `flask --app app set-admin-password`. Passwords must be at least 12 characters. The database file currently in this workspace may contain an account created by an older version; reset it before use.
+   For an existing administrator, use `flask --app app set-admin-password`. Passwords must be at least 3 characters. The database file currently in this workspace may contain an account created by an older version; reset it before use.
 
 5. Start the app with `flask --app app run` and open `http://127.0.0.1:5000/login`.
 
@@ -47,6 +47,6 @@ The portal still needs the full production build described in the project brief:
 
 ## First administrator on Render
 
-For a new deployment, set `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD` in the Render service environment before the first start. The password must contain at least 12 characters. The app creates this account only when the database has no administrator. Remove both bootstrap variables after the account is created; never put the password in this repository.
+For a new deployment, set `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD` in the Render service environment before the first start. The password must contain at least 3 characters. The app creates this account only when the database has no administrator. Remove both bootstrap variables after the account is created; never put the password in this repository.
 
 Use a persistent Render disk for SQLite and set `DATABASE_PATH` to a path on that disk (for example, `/var/data/yrc.db`) so the account survives restarts and redeploys. To create or reset an account later, run `flask --app app create-admin` or `flask --app app set-admin-password` in the service shell.

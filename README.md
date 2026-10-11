@@ -44,3 +44,9 @@ For HTTPS deployments set `COOKIE_SECURE=1`, use a stable randomly generated `SE
 ## Important scope gaps
 
 The portal still needs the full production build described in the project brief: MySQL with SQLAlchemy and versioned migrations; Flask-WTF forms; department/leader administration and backend department isolation; department-linked events and quotas; an application and ranked waitlist workflow with finalization/decline promotion; audited attendance amendments and credit disputes; event editing and full event-specific credit evidence; remaining CSV exports, pagination and filters; and automated tests. The existing account roles currently support the initial `super_admin` path only. Do not treat this build as production-ready for real university records until those controls are implemented and reviewed.
+
+## First administrator on Render
+
+For a new deployment, set `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD` in the Render service environment before the first start. The password must contain at least 12 characters. The app creates this account only when the database has no administrator. Remove both bootstrap variables after the account is created; never put the password in this repository.
+
+Use a persistent Render disk for SQLite and set `DATABASE_PATH` to a path on that disk (for example, `/var/data/yrc.db`) so the account survives restarts and redeploys. To create or reset an account later, run `flask --app app create-admin` or `flask --app app set-admin-password` in the service shell.

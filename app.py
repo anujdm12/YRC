@@ -57,6 +57,17 @@ def init_db():
     # Older records stored department and program together, separated by an em dash.
     conn.execute("UPDATE students SET class_name=TRIM(SUBSTR(department, INSTR(department, '—') + 1)), department=TRIM(SUBSTR(department, 1, INSTR(department, '—') - 1)) WHERE class_name='' AND INSTR(department, '—') > 0")
     conn.execute("INSERT OR IGNORE INTO admin_roles(admin_id,role,department) SELECT id,'super_admin','' FROM admins")
+    bootstrap_username=os.getenv('INITIAL_ADMIN_USERNAME','').strip()
+    bootstrap_password=os.getenv('INITIAL_ADMIN_PASSWORD','')
+    if bool(bootstrap_username) != bool(bootstrap_password):
+        conn.close()
+        raise RuntimeError('Set both INITIAL_ADMIN_USERNAME and INITIAL_ADMIN_PASSWORD to bootstrap the first admin.')
+    if bootstrap_username and len(bootstrap_password) < 12:
+        conn.close()
+        raise RuntimeError('INITIAL_ADMIN_PASSWORD must contain at least 12 characters.')
+    if bootstrap_username and not conn.execute('SELECT 1 FROM admins LIMIT 1').fetchone():
+        cur=conn.execute('INSERT INTO admins(username,password_hash) VALUES(?,?)',(bootstrap_username,generate_password_hash(bootstrap_password)))
+        conn.execute("INSERT INTO admin_roles(admin_id,role,department) VALUES(?,'super_admin','')",(cur.lastrowid,))
     conn.commit(); conn.close()
 
 # Initialize schema for both `python app.py` and Flask/WSGI launchers.

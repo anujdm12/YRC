@@ -9,7 +9,7 @@ import re
 import unicodedata
 from datetime import datetime, date
 from functools import wraps
-from flask import Flask, g, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, g, render_template, request, redirect, url_for, session, flash, jsonify, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
@@ -325,6 +325,31 @@ def attendance_page():
         FROM attendance a JOIN events e ON e.id=a.event_id
         WHERE a.status='Present' AND e.status<>'Cancelled' ''').fetchone()
     return render_template('attendance.html',events=rows,pending=pending,summary=summary)
+
+@app.get('/attendance/export/<int:eid>.csv')
+@login_required
+def attendance_event_csv(eid):
+    conn=db()
+    event=conn.execute("SELECT id,name,event_date FROM events WHERE id=? AND status<>'Cancelled'",(eid,)).fetchone()
+    if not event:
+        flash('That event is unavailable for attendance export.','error')
+        return redirect(url_for('attendance_page'))
+    students=conn.execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,a.status
+        FROM attendance a JOIN students s ON s.id=a.student_id
+        JOIN event_participants p ON p.event_id=a.event_id AND p.student_id=a.student_id AND p.selection_status='Selected'
+        WHERE a.event_id=? AND a.status='Present'
+        ORDER BY s.name,s.register_no''',(eid,)).fetchall()
+    output=io.StringIO(newline='')
+    writer=csv.writer(output)
+    writer.writerow(['Event','Event Date','Register Number','Student Name','Department','Class','Section','Attendance'])
+    for student in students:
+        values=[event['name'],event['event_date'],student['register_no'],student['name'],
+                student['department'],student['class_name'],student['section'],student['status']]
+        writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value)
+                         for value in values])
+    filename=f"event-{eid}-attended-students.csv"
+    return Response('\ufeff'+output.getvalue(),mimetype='text/csv; charset=utf-8',
+                    headers={'Content-Disposition':f'attachment; filename="{filename}"'})
 
 def normalize_import_key(value):
     return re.sub(r'[^a-z0-9]+',' ',str(value or '').casefold()).strip()

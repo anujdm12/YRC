@@ -1,0 +1,17 @@
+# Local databases, backups, and exported student data
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.csv
+
+# Local environments and runtime artifacts
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+instance/
+review_crops/
+ambig.png

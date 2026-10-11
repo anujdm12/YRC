@@ -40,7 +40,7 @@ For HTTPS deployments set `COOKIE_SECURE=1`, use a stable randomly generated `SE
 - Deactivating a student and cancelling an event preserve linked history. Only selected participants can receive attendance statuses.
 - CSV roster import validates the entire file before inserting any rows. The current roster schema retains the legacy student naming and class fields.
 - Attendance has a reviewed Google Sheets CSV import. It uses the latest submission per register number, matches by register number first and falls back to a unique exact full name, combines Ethnic Day labels, and skips attendance already marked Present. Duplicate names remain unmatched for review. New events require an administrator-entered date; response timestamps are not treated as event dates. Preview details are removed after confirmation, while an import summary is retained.
-- The database is SQLite (`DATABASE_PATH`, default `yrc.db`). `init_db` performs basic additive setup only; it is not a versioned migration system.
+- The app supports SQLite locally (`DATABASE_PATH`, default `yrc.db`) and PostgreSQL through `DATABASE_URL` (including Neon). PostgreSQL schema setup is automatic; existing SQLite records must be migrated separately.
 
 ## Important scope gaps
 
@@ -50,4 +50,8 @@ The portal still needs the full production build described in the project brief:
 
 For a new deployment, set `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD` in the Render service environment before the first start. The password must contain at least 3 characters. The app creates this account only when the database has no administrator. Remove both bootstrap variables after the account is created; never put the password in this repository.
 
-Use a persistent Render disk for SQLite and set `DATABASE_PATH` to a path on that disk (for example, `/var/data/yrc.db`) so the account survives restarts and redeploys. To create or reset an account later, run `flask --app app create-admin` or `flask --app app set-admin-password` in the service shell.
+For a persistent hosted database, create a Neon PostgreSQL project, copy its pooled connection string, and add it to Render as the `DATABASE_URL` environment variable. Keep the URL secret and include `sslmode=require` if it is not already present. The app creates its tables on first start. `DATABASE_URL` takes precedence over SQLite's `DATABASE_PATH`.
+
+Switching to Neon does not copy records automatically. With a local SQLite backup, install requirements, set `DATABASE_URL` in your shell, make sure `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD` are unset, then run `py migrate_sqlite_to_postgres.py --source yrc.db`. The migration stops if any destination table already has rows. For data still on a live Render instance, back it up before changing the database setting; the local migration script needs a copy of that SQLite file.
+
+For PostgreSQL, create the first administrator with `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD`; remove those bootstrap values after the first successful start. To create or reset an account later, run `flask --app app create-admin` or `flask --app app set-admin-password` with the same `DATABASE_URL`.

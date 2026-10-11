@@ -11,6 +11,7 @@ from datetime import datetime, date
 from functools import wraps
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, jsonify, Response
 from werkzeug.security import generate_password_hash, check_password_hash
+from database import connect_db, DB_ERROR, DB_INTEGRITY_ERROR, DB_IMPORT_ERROR, USING_POSTGRES
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY') or secrets.token_hex(32)
@@ -41,9 +42,7 @@ CREATE TABLE IF NOT EXISTS participation_import_rows(id INTEGER PRIMARY KEY, bat
 
 def db():
     if 'db' not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute('PRAGMA foreign_keys = ON')
+        g.db = connect_db(DB_PATH)
     return g.db
 
 @app.teardown_appcontext
@@ -52,7 +51,7 @@ def close_db(_):
     if conn: conn.close()
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = connect_db(DB_PATH)
     conn.executescript(SCHEMA)
     student_columns = {row[1] for row in conn.execute('PRAGMA table_info(students)')}
     if 'class_name' not in student_columns:
@@ -63,8 +62,14 @@ def init_db():
     if 'match_method' not in import_row_columns:
         conn.execute("ALTER TABLE participation_import_rows ADD COLUMN match_method TEXT NOT NULL DEFAULT 'register_no'")
     # Older records stored department and program together, separated by an em dash.
-    conn.execute("UPDATE students SET class_name=TRIM(SUBSTR(department, INSTR(department, '—') + 1)), department=TRIM(SUBSTR(department, 1, INSTR(department, '—') - 1)) WHERE class_name='' AND INSTR(department, '—') > 0")
-    conn.execute("INSERT OR IGNORE INTO admin_roles(admin_id,role,department) SELECT id,'super_admin','' FROM admins")
+    if USING_POSTGRES:
+        conn.execute("UPDATE students SET class_name=TRIM(SUBSTRING(department FROM POSITION('—' IN department) + 1)), department=TRIM(SUBSTRING(department FROM 1 FOR POSITION('—' IN department) - 1)) WHERE class_name='' AND POSITION('—' IN department) > 0")
+    else:
+        conn.execute("UPDATE students SET class_name=TRIM(SUBSTR(department, INSTR(department, '—') + 1)), department=TRIM(SUBSTR(department, 1, INSTR(department, '—') - 1)) WHERE class_name='' AND INSTR(department, '—') > 0")
+    if USING_POSTGRES:
+        conn.execute("INSERT INTO admin_roles(admin_id,role,department) SELECT id,'super_admin','' FROM admins ON CONFLICT (admin_id) DO NOTHING")
+    else:
+        conn.execute("INSERT OR IGNORE INTO admin_roles(admin_id,role,department) SELECT id,'super_admin','' FROM admins")
     bootstrap_username=os.getenv('INITIAL_ADMIN_USERNAME','').strip()
     bootstrap_password=os.getenv('INITIAL_ADMIN_PASSWORD','')
     if bool(bootstrap_username) != bool(bootstrap_password):
@@ -88,12 +93,12 @@ def create_admin(username, password):
     """Create the initial administrator without a built-in credential."""
     if len(password) < 3:
         raise click.ClickException('Use a password with at least 3 characters.')
-    conn=sqlite3.connect(DB_PATH)
+    conn=connect_db(DB_PATH)
     try:
         cur=conn.execute('INSERT INTO admins(username,password_hash) VALUES(?,?)',(username.strip(),generate_password_hash(password)))
         conn.execute("INSERT INTO admin_roles(admin_id,role,department) VALUES(?,'super_admin','')",(cur.lastrowid,))
         conn.commit()
-    except sqlite3.IntegrityError as exc:
+    except DB_INTEGRITY_ERROR as exc:
         raise click.ClickException('That username already exists.') from exc
     finally: conn.close()
 
@@ -104,7 +109,7 @@ def set_admin_password(username, password):
     """Reset an existing administrator password."""
     if len(password) < 3:
         raise click.ClickException('Use a password with at least 3 characters.')
-    conn=sqlite3.connect(DB_PATH)
+    conn=connect_db(DB_PATH)
     cur=conn.execute('UPDATE admins SET password_hash=? WHERE username=?',(generate_password_hash(password),username.strip()))
     conn.commit(); conn.close()
     if cur.rowcount != 1: raise click.ClickException('Administrator username was not found.')
@@ -190,7 +195,7 @@ def students():
         try:
             cur=conn.execute('INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status) VALUES(?,?,?,?,?,?,?,?,?)',(f['register_no'].strip(),f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),f.get('yrc_status','Active')))
             audit('Student added','student',cur.lastrowid,'',f['register_no']); conn.commit(); flash('Student added.','success')
-        except sqlite3.IntegrityError: conn.rollback(); flash('Register number already exists.','error')
+        except DB_INTEGRITY_ERROR: conn.rollback(); flash('Register number already exists.','error')
         return redirect(url_for('students'))
     q=request.args.get('q','').strip(); status=request.args.get('status',''); dept=request.args.get('department',''); section=request.args.get('section','').upper()
     where=[]; args=[]
@@ -239,7 +244,7 @@ def import_students():
     try:
         conn.executemany('INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status) VALUES(?,?,?,?,?,?,?,?,?)',records)
         audit('Student CSV imported','student',0,'',f'{len(records)} added'); conn.commit()
-    except sqlite3.IntegrityError:
+    except DB_INTEGRITY_ERROR:
         conn.rollback(); flash('The import was rejected by a database constraint. No students were imported; check register numbers and required fields.','error'); return redirect(url_for('students'))
     flash(f'Imported all {len(records)} students successfully.','success'); return redirect(url_for('students'))
 
@@ -281,7 +286,7 @@ def student_edit(sid):
     try:
         conn.execute('UPDATE students SET register_no=?,name=?,department=?,class_name=?,section=?,year=?,email=?,phone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(f['register_no'].strip(),f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),sid))
         audit('Student edited','student',sid,'','profile updated'); conn.commit(); flash('Student profile updated.','success')
-    except sqlite3.IntegrityError: conn.rollback(); flash('Register number already belongs to another student.','error')
+    except DB_INTEGRITY_ERROR: conn.rollback(); flash('Register number already belongs to another student.','error')
     return redirect(url_for('student_detail',sid=sid))
 
 @app.route('/events',methods=['GET','POST'])
@@ -524,7 +529,7 @@ def participation_import():
         conn.executemany('INSERT INTO participation_import_rows(batch_id,source_row,register_no,student_name,event_name,student_id,error,match_method) VALUES(?,?,?,?,?,?,?,?)',
                          [(batch_id,*item) for item in flat])
         conn.commit()
-    except sqlite3.Error:
+    except DB_ERROR:
         conn.rollback(); flash('The sheet could not be staged for review. No records were imported.','error'); return redirect(url_for('participation_import'))
     return redirect(url_for('participation_import_review',batch_id=batch_id))
 
@@ -615,7 +620,7 @@ def participation_import_confirm(batch_id):
         conn.execute('DELETE FROM participation_import_rows WHERE batch_id=?',(batch_id,))
         audit('Participation sheet imported','participation_import',0,'',f'{imported} records; batch {batch_id}')
         conn.commit()
-    except (sqlite3.Error,KeyError,ValueError):
+    except DB_IMPORT_ERROR:
         conn.rollback(); flash('The import could not be completed. No partial records were saved. Review the preview and try again.','error')
         return redirect(url_for('participation_import_review',batch_id=batch_id))
     flash(f'Import complete: {imported} participation record(s) added or updated; {skipped} skipped. The next import will not duplicate these attended records.','success')
@@ -671,7 +676,7 @@ def event_permanent_delete(eid):
         conn.execute('DELETE FROM selection_history WHERE event_id=?',(eid,))
         conn.execute('DELETE FROM events WHERE id=?',(eid,))
         conn.commit(); flash('Cancelled event and its linked participation, attendance, and credit records were permanently deleted.','success')
-    except sqlite3.IntegrityError:
+    except DB_INTEGRITY_ERROR:
         conn.rollback(); flash('Event could not be deleted because linked records still reference it.','error')
     return redirect(url_for('events'))
 

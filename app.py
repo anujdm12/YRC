@@ -6,6 +6,7 @@ import click
 import csv
 import io
 import re
+import unicodedata
 from datetime import datetime, date
 from functools import wraps
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, jsonify
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS credits(id INTEGER PRIMARY KEY, event_id INTEGER NOT 
 CREATE TABLE IF NOT EXISTS login_attempts(id INTEGER PRIMARY KEY, username TEXT NOT NULL, attempted_at INTEGER NOT NULL, success INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS admin_audit_logs(id INTEGER PRIMARY KEY, admin_id INTEGER, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS participation_import_batches(id TEXT PRIMARY KEY, admin_id INTEGER NOT NULL, filename TEXT NOT NULL, response_count INTEGER NOT NULL DEFAULT 0, unique_respondents INTEGER NOT NULL DEFAULT 0, repeated_respondents INTEGER NOT NULL DEFAULT 0, missing_register_count INTEGER NOT NULL DEFAULT 0, record_count INTEGER NOT NULL DEFAULT 0, imported_count INTEGER NOT NULL DEFAULT 0, skipped_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'Preview', created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT);
-CREATE TABLE IF NOT EXISTS participation_import_rows(id INTEGER PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES participation_import_batches(id) ON DELETE CASCADE, source_row INTEGER NOT NULL, register_no TEXT NOT NULL, student_name TEXT NOT NULL, event_name TEXT NOT NULL, student_id INTEGER, error TEXT NOT NULL DEFAULT '', UNIQUE(batch_id,source_row,event_name));
+CREATE TABLE IF NOT EXISTS participation_import_rows(id INTEGER PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES participation_import_batches(id) ON DELETE CASCADE, source_row INTEGER NOT NULL, register_no TEXT NOT NULL, student_name TEXT NOT NULL, event_name TEXT NOT NULL, student_id INTEGER, error TEXT NOT NULL DEFAULT '', match_method TEXT NOT NULL DEFAULT 'register_no', UNIQUE(batch_id,source_row,event_name));
 '''
 
 def db():
@@ -58,6 +59,9 @@ def init_db():
         conn.execute("ALTER TABLE students ADD COLUMN class_name TEXT NOT NULL DEFAULT ''")
     if 'section' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN section TEXT NOT NULL DEFAULT ''")
+    import_row_columns={row[1] for row in conn.execute('PRAGMA table_info(participation_import_rows)')}
+    if 'match_method' not in import_row_columns:
+        conn.execute("ALTER TABLE participation_import_rows ADD COLUMN match_method TEXT NOT NULL DEFAULT 'register_no'")
     # Older records stored department and program together, separated by an em dash.
     conn.execute("UPDATE students SET class_name=TRIM(SUBSTR(department, INSTR(department, '—') + 1)), department=TRIM(SUBSTR(department, 1, INSTR(department, '—') - 1)) WHERE class_name='' AND INSTR(department, '—') > 0")
     conn.execute("INSERT OR IGNORE INTO admin_roles(admin_id,role,department) SELECT id,'super_admin','' FROM admins")
@@ -328,6 +332,21 @@ def normalize_import_key(value):
 def normalize_register_no(value):
     return re.sub(r'[^A-Z0-9]','',str(value or '').upper())
 
+def normalize_student_name(value):
+    ascii_name=unicodedata.normalize('NFKD',str(value or '')).encode('ascii','ignore').decode('ascii').casefold()
+    return re.sub(r'[^a-z0-9]+',' ',ascii_name).strip()
+
+def resolve_import_student(register_no,student_name,roster_by_reg,roster_by_name):
+    register_key=normalize_register_no(register_no)
+    register_matches=roster_by_reg.get(register_key,[]) if register_key else []
+    if len(register_matches)==1: return register_matches[0],'register_no',''
+    if len(register_matches)>1: return None,'','Register number matches multiple roster records.'
+    name_key=normalize_student_name(student_name)
+    name_matches=roster_by_name.get(name_key,[]) if name_key else []
+    if len(name_matches)==1: return name_matches[0],'name',''
+    if len(name_matches)>1: return None,'','Name matches multiple roster records; review manually.'
+    return None,'','No exact register number or name match.'
+
 def canonical_event_name(value):
     label=' '.join(str(value or '').split()).strip()[:120]
     key=normalize_import_key(label)
@@ -372,6 +391,7 @@ def participation_import_preview(batch_id):
     importable_count=0
     already_count=0
     ambiguous_count=0
+    name_match_count=sum(1 for row in source_rows if row['student_id'] and row['match_method']=='name')
     for event_name,rows in sorted(grouped.items()):
         key=normalize_import_key(canonical_event_name(event_name))
         matches=[event for event in active_events if normalize_import_key(canonical_event_name(event['name']))==key]
@@ -394,7 +414,8 @@ def participation_import_preview(batch_id):
                           'already':event_already,'to_import':len(ready),'event':matched_event,
                           'ambiguous':ambiguous,'date_field':'event_date_'+str(len(summaries))})
     return {'batch':batch,'events':summaries,'unmatched':unmatched,'unmatched_count':len(unmatched),
-            'importable_count':importable_count,'already_count':already_count,'ambiguous_count':ambiguous_count}
+            'importable_count':importable_count,'already_count':already_count,'ambiguous_count':ambiguous_count,
+            'name_match_count':name_match_count}
 
 @app.route('/attendance/import',methods=['GET','POST'])
 @login_required
@@ -451,22 +472,22 @@ def participation_import():
         previous=latest.get(response['register_key'])
         if not previous or parse_sheet_timestamp(response['timestamp'],response['row_number'])>parse_sheet_timestamp(previous['timestamp'],previous['row_number']):
             latest[response['register_key']]=response
-    roster={}
-    for student in conn.execute('SELECT id,register_no FROM students').fetchall():
-        roster.setdefault(normalize_register_no(student['register_no']),[]).append(student['id'])
+    roster_by_reg={}; roster_by_name={}
+    for student in conn.execute('SELECT id,register_no,name FROM students').fetchall():
+        roster_by_reg.setdefault(normalize_register_no(student['register_no']),[]).append(student['id'])
+        roster_by_name.setdefault(normalize_student_name(student['name']),[]).append(student['id'])
     flat=[]
     for response in latest.values():
         seen=set()
         for event_name in response['choices']:
             if event_name in seen: continue
             seen.add(event_name)
-            matches=roster.get(response['register_key'],[])
-            student_id=matches[0] if len(matches)==1 else None
-            error='' if student_id else ('Register number matches multiple student records.' if len(matches)>1 else 'No exact student roster match.')
-            flat.append((response['row_number'],response['register_no'],response['name'],event_name,student_id,error))
+            student_id,match_method,error=resolve_import_student(response['register_no'],response['name'],roster_by_reg,roster_by_name)
+            flat.append((response['row_number'],response['register_no'],response['name'],event_name,student_id,error,match_method))
     for response in missing_register_rows:
         for event_name in response['choices']:
-            flat.append((response['row_number'],'',response['name'],event_name,None,'Response is missing a register number.'))
+            student_id,match_method,error=resolve_import_student('',response['name'],roster_by_reg,roster_by_name)
+            flat.append((response['row_number'],'',response['name'],event_name,student_id,error or 'Register number is missing; matched by exact name.',match_method))
     if not flat:
         flash('The responses contain no selected YRC activities to import.','error'); return redirect(url_for('participation_import'))
     batch_id=secrets.token_urlsafe(24)
@@ -475,7 +496,7 @@ def participation_import():
         conn.execute('DELETE FROM participation_import_batches WHERE status="Preview" AND created_at < datetime("now","-1 day")')
         conn.execute('INSERT INTO participation_import_batches(id,admin_id,filename,response_count,unique_respondents,repeated_respondents,missing_register_count,record_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
                      (batch_id,session['admin_id'],os.path.basename(upload.filename)[:180],response_count,len(latest),len(responses)-len(latest),len(missing_register_rows),len(flat),'Preview'))
-        conn.executemany('INSERT INTO participation_import_rows(batch_id,source_row,register_no,student_name,event_name,student_id,error) VALUES(?,?,?,?,?,?,?)',
+        conn.executemany('INSERT INTO participation_import_rows(batch_id,source_row,register_no,student_name,event_name,student_id,error,match_method) VALUES(?,?,?,?,?,?,?,?)',
                          [(batch_id,*item) for item in flat])
         conn.commit()
     except sqlite3.Error:
@@ -543,19 +564,17 @@ def participation_import_confirm(batch_id):
                                  (canonical_event_name(event['name']),'Imported from YRC participation sheet',dates[event['name']],'Completed'))
                 event_ids[event['name']]=cur.lastrowid
         imported=0; skipped=0
-        current_roster={}
-        for student_row in conn.execute('SELECT id,register_no FROM students').fetchall():
-            current_roster.setdefault(normalize_register_no(student_row['register_no']),[]).append(student_row['id'])
+        current_roster_by_reg={}; current_roster_by_name={}
+        for student_row in conn.execute('SELECT id,register_no,name FROM students').fetchall():
+            current_roster_by_reg.setdefault(normalize_register_no(student_row['register_no']),[]).append(student_row['id'])
+            current_roster_by_name.setdefault(normalize_student_name(student_row['name']),[]).append(student_row['id'])
         for row in rows:
-            if not row['register_no']:
-                skipped+=1; continue
             event_id=event_ids.get(row['event_name'])
             if not event_id:
                 skipped+=1; continue
-            current_matches=current_roster.get(normalize_register_no(row['register_no']),[])
-            if len(current_matches)!=1:
+            student_id,match_method,error=resolve_import_student(row['register_no'],row['student_name'],current_roster_by_reg,current_roster_by_name)
+            if not student_id:
                 skipped+=1; continue
-            student_id=current_matches[0]
             old=conn.execute('SELECT status FROM attendance WHERE event_id=? AND student_id=?',(event_id,student_id)).fetchone()
             if old and old['status']=='Present':
                 skipped+=1; continue

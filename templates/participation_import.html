@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block title %}Import participation{% endblock %}
+{% block crumb %}SHEET IMPORT{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">PARTICIPATION WORKFLOW</div><h1>Import from a sheet</h1><p class="subhead">Review student matches and event totals before saving anything.</p></div><a class="btn secondary" href="/attendance">Back to attendance</a></div>
+
+{% if preview %}
+<div class="stats-grid">
+  <article class="stat-card"><div class="stat-top"><span>Responses</span><span class="stat-icon blue">01</span></div><strong>{{ preview.batch.response_count }}</strong><small>response rows in this file</small></article>
+  <article class="stat-card"><div class="stat-top"><span>Unique respondents</span><span class="stat-icon red">02</span></div><strong>{{ preview.batch.unique_respondents }}</strong><small>{% if preview.batch.repeated_respondents %}{{ preview.batch.repeated_respondents }} repeat submission(s); latest response used{% else %}no repeated register numbers{% endif %}</small></article>
+  <article class="stat-card"><div class="stat-top"><span>Records to add</span><span class="stat-icon green">03</span></div><strong>{{ preview.importable_count }}</strong><small>matched student and event pairs</small></article>
+  <article class="stat-card"><div class="stat-top"><span>Already recorded</span><span class="stat-icon amber">04</span></div><strong>{{ preview.already_count }}</strong><small>present records will be left unchanged</small></article>
+</div>
+<section class="panel import-review-panel">
+  <div class="panel-head"><div><h2>Event review</h2><p>Ethnic Day and Ethnic Day Volunteer are combined. A response timestamp is never used as an event date.</p></div><span class="count-pill">{{ preview.events|length }} activities</span></div>
+  {% if preview.batch.missing_register_count %}<div class="import-warning"><b>{{ preview.batch.missing_register_count }} response row(s) have no register number.</b><p>Any selected activities on those rows cannot be assigned to a student and will be skipped only if you explicitly choose to continue.</p></div>{% endif %}
+  <form method="post" action="{{ url_for('participation_import_confirm',batch_id=preview.batch.id) }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <div class="table-scroll"><table><thead><tr><th>ACTIVITY</th><th>RESPONSES</th><th>MATCHED</th><th>ALREADY PRESENT</th><th>TO ADD</th><th>EVENT DATE</th></tr></thead><tbody>
+    {% for e in preview.events %}<tr>
+      <td class="table-title">{{ e.name }}{% if e.ambiguous %}<div class="cell-sub">Multiple matching events found</div>{% elif e.event %}<div class="cell-sub">Using existing event · {{ e.event.name }}</div>{% else %}<div class="cell-sub">New completed event</div>{% endif %}</td>
+      <td>{{ e.rows }}</td><td>{{ e.matched }}</td><td>{{ e.already }}</td><td><b>{{ e.to_import }}</b>{% if e.unmatched %}<div class="cell-sub">{{ e.unmatched }} unmatched</div>{% endif %}</td>
+      <td>{% if e.event %}<span>{{ e.event.event_date }}</span>{% elif e.to_import %}<input type="date" name="{{ e.date_field }}" required aria-label="Date for {{ e.name }}">{% else %}<span class="cell-sub">No event needed</span>{% endif %}</td>
+    </tr>{% endfor %}
+    </tbody></table></div>
+    {% if preview.unmatched_count %}<div class="import-warning"><b>{{ preview.unmatched_count }} activity record(s) could not be matched to the student roster.</b><p>They will be skipped if you continue. Check the register numbers or add those students to the roster, then upload again.</p><label class="check-row"><input type="checkbox" name="skip_unmatched" value="1"> I understand these unmatched records will be skipped.</label></div>{% endif %}
+    {% if preview.ambiguous_count %}<div class="import-warning"><b>Resolve duplicate event names before importing.</b><p>More than one active event matches at least one activity. Rename or cancel the duplicate event, then upload the sheet again.</p></div>{% endif %}
+    {% if preview.unmatched %}<details class="import-unmatched"><summary>Review unmatched student rows</summary><div class="table-scroll"><table><thead><tr><th>REGISTER NUMBER</th><th>NAME IN SHEET</th><th>ACTIVITY</th><th>REASON</th></tr></thead><tbody>{% for row in preview.unmatched[:50] %}<tr><td>{{ row.register_no or 'Missing' }}</td><td>{{ row.student_name or 'Not provided' }}</td><td>{{ row.event_name }}</td><td>{{ row.error }}</td></tr>{% endfor %}</tbody></table></div>{% if preview.unmatched_count>50 %}<p class="cell-sub">Showing first 50 unmatched activity records.</p>{% endif %}</details>{% endif %}
+    <div class="modal-actions import-actions"><button class="btn secondary" type="submit" formmethod="post" formaction="{{ url_for('participation_import_cancel',batch_id=preview.batch.id) }}">Cancel preview</button><button class="btn primary" type="submit" {% if preview.ambiguous_count or not preview.importable_count %}disabled{% endif %}>Confirm import</button></div>
+  </form>
+</section>
+{% else %}
+<div class="import-layout">
+  <section class="panel import-upload-panel"><div class="panel-head"><div><h2>Upload the latest response sheet</h2><p>Export the current Google Sheets tab as CSV, then preview the matches here.</p></div><span class="badge active">Review first</span></div>
+    <form method="post" enctype="multipart/form-data" class="import-upload-form"><input type="hidden" name="_csrf_token" value="{{ csrf_token }}"><label class="upload-drop"><span class="upload-icon">↑</span><b>Choose a CSV file</b><small>Google Sheets export · CSV up to 5 MB</small><input type="file" name="file" accept=".csv,text/csv" required></label><button class="btn primary" type="submit">Prepare preview <span>→</span></button></form>
+    <div class="import-guidance"><b>What the importer does</b><ul><li>Matches respondents by register number and uses the latest response if a student submitted more than once.</li><li>Combines “Ethnic Day” and “Ethnic Day Volunteer”.</li><li>Skips “None”, preserves records already marked Present, and flags roster mismatches.</li><li>Asks for an event date when it needs to create a new event; form timestamps are not event dates.</li></ul></div>
+  </section>
+  <aside class="panel import-side-note"><div class="eyebrow">BEFORE YOU IMPORT</div><h2>Keep the roster in sync</h2><p>Every activity row must match a student by register number. Unmatched entries are listed in the preview so you can fix the roster or explicitly skip them.</p><p>Each confirmed activity is saved as a selected participant with Present attendance and a pending credit review.</p><p>Reuploading the same sheet is safe: existing Present records won’t be duplicated.</p></aside>
+</div>
+{% if recent %}<section class="panel import-history"><div class="panel-head"><div><h2>Recent imports</h2><p>Import summaries are retained; respondent details are removed after confirmation.</p></div></div><div class="table-scroll"><table><thead><tr><th>FILE</th><th>STATUS</th><th>RESPONSES</th><th>ADDED</th><th>SKIPPED</th><th>DATE</th></tr></thead><tbody>{% for b in recent %}<tr><td>{{ b.filename }}</td><td><span class="badge {{ 'present' if b.status=='Completed' else 'pending' }}">{{ b.status }}</span></td><td>{{ b.response_count }}</td><td>{{ b.imported_count }}</td><td>{{ b.skipped_count }}</td><td>{{ b.completed_at or b.created_at }}</td></tr>{% endfor %}</tbody></table></div></section>{% endif %}
+{% endif %}
+{% endblock %}

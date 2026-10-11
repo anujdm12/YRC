@@ -39,6 +39,7 @@ For HTTPS deployments set `COOKIE_SECURE=1`, use a stable randomly generated `SE
 - The recommendation route orders active volunteers by `(previous attended events * 100) + previous selected seat offers`, applies the remaining seat capacity, and records its priority values and a random tie break.
 - Deactivating a student and cancelling an event preserve linked history. Only selected participants can receive attendance statuses.
 - CSV roster import validates the entire file before inserting any rows. The current roster schema retains the legacy student naming and class fields.
+- Attendance has a reviewed Google Sheets CSV import. It uses the latest submission per register number, matches only existing roster records, combines Ethnic Day labels, and skips attendance already marked Present. New events require an administrator-entered date; response timestamps are not treated as event dates. Preview details are removed after confirmation, while an import summary is retained.
 - The database is SQLite (`DATABASE_PATH`, default `yrc.db`). `init_db` performs basic additive setup only; it is not a versioned migration system.
 
 ## Important scope gaps

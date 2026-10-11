@@ -5,6 +5,7 @@ import time
 import click
 import csv
 import io
+import re
 from datetime import datetime, date
 from functools import wraps
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, jsonify
@@ -14,6 +15,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY') or secrets.token_hex(32)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax',
                   SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE', '0') == '1')
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 DB_PATH = os.getenv('DATABASE_PATH', 'yrc.db')
 
 @app.context_processor
@@ -32,6 +34,8 @@ CREATE TABLE IF NOT EXISTS attendance(id INTEGER PRIMARY KEY, event_id INTEGER N
 CREATE TABLE IF NOT EXISTS credits(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, credit_points REAL NOT NULL, status TEXT NOT NULL DEFAULT 'Awarded', awarded_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_by INTEGER, UNIQUE(event_id,student_id), FOREIGN KEY(event_id,student_id) REFERENCES event_participants(event_id,student_id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS login_attempts(id INTEGER PRIMARY KEY, username TEXT NOT NULL, attempted_at INTEGER NOT NULL, success INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS admin_audit_logs(id INTEGER PRIMARY KEY, admin_id INTEGER, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS participation_import_batches(id TEXT PRIMARY KEY, admin_id INTEGER NOT NULL, filename TEXT NOT NULL, response_count INTEGER NOT NULL DEFAULT 0, unique_respondents INTEGER NOT NULL DEFAULT 0, repeated_respondents INTEGER NOT NULL DEFAULT 0, missing_register_count INTEGER NOT NULL DEFAULT 0, record_count INTEGER NOT NULL DEFAULT 0, imported_count INTEGER NOT NULL DEFAULT 0, skipped_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'Preview', created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT);
+CREATE TABLE IF NOT EXISTS participation_import_rows(id INTEGER PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES participation_import_batches(id) ON DELETE CASCADE, source_row INTEGER NOT NULL, register_no TEXT NOT NULL, student_name TEXT NOT NULL, event_name TEXT NOT NULL, student_id INTEGER, error TEXT NOT NULL DEFAULT '', UNIQUE(batch_id,source_row,event_name));
 '''
 
 def db():
@@ -317,6 +321,261 @@ def attendance_page():
         FROM attendance a JOIN events e ON e.id=a.event_id
         WHERE a.status='Present' AND e.status<>'Cancelled' ''').fetchone()
     return render_template('attendance.html',events=rows,pending=pending,summary=summary)
+
+def normalize_import_key(value):
+    return re.sub(r'[^a-z0-9]+',' ',str(value or '').casefold()).strip()
+
+def normalize_register_no(value):
+    return re.sub(r'[^A-Z0-9]','',str(value or '').upper())
+
+def canonical_event_name(value):
+    label=' '.join(str(value or '').split()).strip()[:120]
+    key=normalize_import_key(label)
+    if 'ethnic day' in key: return 'Ethnic Day'
+    aliases={
+        'drug awareness':'Drug Awareness',
+        'tatva':'TATVA',
+        'orientation':'Orientation',
+        'first aid':'First Aid',
+        'park cleaning drive':'Park Cleaning Drive',
+    }
+    return aliases.get(key,label)
+
+def parse_event_choices(value):
+    choices=[]
+    for part in re.split(r'[,;\n]+',str(value or '')):
+        item=' '.join(part.split()).strip()
+        if not item or normalize_import_key(item) in ('none','none of the above','no activities','other','other please specify'):
+            continue
+        label=canonical_event_name(item)
+        if label and label not in choices: choices.append(label)
+    return choices
+
+def parse_sheet_timestamp(value, fallback):
+    raw=str(value or '').strip()
+    for fmt in ('%m/%d/%Y %H:%M:%S','%m/%d/%Y %I:%M:%S %p','%d/%m/%Y %H:%M:%S','%Y-%m-%d %H:%M:%S'):
+        try: return (datetime.strptime(raw,fmt),fallback)
+        except ValueError: pass
+    try: return (datetime.fromisoformat(raw.replace('Z','+00:00')).replace(tzinfo=None),fallback)
+    except ValueError: return (datetime.min,fallback)
+
+def participation_import_preview(batch_id):
+    conn=db()
+    batch=conn.execute('SELECT * FROM participation_import_batches WHERE id=?',(batch_id,)).fetchone()
+    if not batch or batch['status']!='Preview': return None
+    source_rows=conn.execute('SELECT * FROM participation_import_rows WHERE batch_id=? ORDER BY event_name,student_name',(batch_id,)).fetchall()
+    active_events=conn.execute("SELECT * FROM events WHERE status<>'Cancelled' ORDER BY event_date,name").fetchall()
+    grouped={}
+    for row in source_rows: grouped.setdefault(row['event_name'],[]).append(row)
+    summaries=[]
+    unmatched=[]
+    importable_count=0
+    already_count=0
+    ambiguous_count=0
+    for event_name,rows in sorted(grouped.items()):
+        key=normalize_import_key(canonical_event_name(event_name))
+        matches=[event for event in active_events if normalize_import_key(canonical_event_name(event['name']))==key]
+        matched_event=matches[0] if len(matches)==1 else None
+        ambiguous=len(matches)>1
+        if ambiguous: ambiguous_count+=1
+        ready=[]
+        event_already=0
+        event_unmatched=0
+        for row in rows:
+            if not row['student_id']:
+                event_unmatched+=1; unmatched.append(row); continue
+            if matched_event:
+                attendance=conn.execute('SELECT status FROM attendance WHERE event_id=? AND student_id=?',(matched_event['id'],row['student_id'])).fetchone()
+                if attendance and attendance['status']=='Present':
+                    event_already+=1; already_count+=1; continue
+            ready.append(row)
+        importable_count+=len(ready)
+        summaries.append({'name':event_name,'rows':len(rows),'matched':len(rows)-event_unmatched,'unmatched':event_unmatched,
+                          'already':event_already,'to_import':len(ready),'event':matched_event,
+                          'ambiguous':ambiguous,'date_field':'event_date_'+str(len(summaries))})
+    return {'batch':batch,'events':summaries,'unmatched':unmatched,'unmatched_count':len(unmatched),
+            'importable_count':importable_count,'already_count':already_count,'ambiguous_count':ambiguous_count}
+
+@app.route('/attendance/import',methods=['GET','POST'])
+@login_required
+def participation_import():
+    conn=db()
+    if request.method=='GET':
+        conn.execute('DELETE FROM participation_import_rows WHERE batch_id IN (SELECT id FROM participation_import_batches WHERE status="Preview" AND created_at < datetime("now","-1 day"))')
+        conn.execute('UPDATE participation_import_batches SET status="Expired" WHERE status="Preview" AND created_at < datetime("now","-1 day")')
+        conn.commit()
+        recent=conn.execute('SELECT * FROM participation_import_batches ORDER BY created_at DESC LIMIT 8').fetchall()
+        return render_template('participation_import.html',preview=None,recent=recent)
+    upload=request.files.get('file')
+    if not upload or not upload.filename:
+        flash('Choose a Google Sheets CSV export first.','error'); return redirect(url_for('participation_import'))
+    raw=upload.read()
+    try: text=raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        try: text=raw.decode('cp1252')
+        except UnicodeDecodeError:
+            flash('The CSV encoding could not be read. Export the sheet as CSV and try again.','error'); return redirect(url_for('participation_import'))
+    reader=csv.DictReader(io.StringIO(text))
+    headers=reader.fieldnames or []
+    normalized={re.sub(r'[^a-z0-9]+',' ',h.casefold()).strip():h for h in headers}
+    name_col=next((h for key,h in normalized.items() if 'full name' in key),None)
+    register_col=next((h for key,h in normalized.items() if 'register number' in key),None)
+    activity_col=next((h for key,h in normalized.items() if 'participated in so far' in key),None)
+    timestamp_col=next((h for key,h in normalized.items() if key=='timestamp'),None)
+    other_col=next((h for key,h in normalized.items() if key=='column 1'),None)
+    if not name_col or not register_col or not activity_col:
+        flash('This file needs Full Name, Register Number, and the YRC activities question columns. No data was imported.','error')
+        return redirect(url_for('participation_import'))
+    responses=[]
+    missing_register_rows=[]
+    response_count=0
+    for row_number,row in enumerate(reader,start=2):
+        if not any(str(value or '').strip() for value in row.values()): continue
+        response_count+=1
+        register_no=' '.join(str(row.get(register_col) or '').split())
+        name=' '.join(str(row.get(name_col) or '').split())
+        if not register_no:
+            choices=parse_event_choices(row.get(activity_col,''))
+            if other_col: choices.extend(choice for choice in parse_event_choices(row.get(other_col,'')) if choice not in choices)
+            missing_register_rows.append({'row_number':row_number,'name':name,'choices':choices})
+            continue
+        key=normalize_register_no(register_no)
+        choices=parse_event_choices(row.get(activity_col,''))
+        if other_col: choices.extend(choice for choice in parse_event_choices(row.get(other_col,'')) if choice not in choices)
+        responses.append({'row_number':row_number,'register_no':register_no,'register_key':key,'name':name,
+                          'choices':choices,'timestamp':str(row.get(timestamp_col) or '') if timestamp_col else ''})
+    if not responses and not any(item['choices'] for item in missing_register_rows):
+        flash('No usable responses with register numbers were found. No data was imported.','error'); return redirect(url_for('participation_import'))
+    latest={}
+    for response in responses:
+        previous=latest.get(response['register_key'])
+        if not previous or parse_sheet_timestamp(response['timestamp'],response['row_number'])>parse_sheet_timestamp(previous['timestamp'],previous['row_number']):
+            latest[response['register_key']]=response
+    roster={}
+    for student in conn.execute('SELECT id,register_no FROM students').fetchall():
+        roster.setdefault(normalize_register_no(student['register_no']),[]).append(student['id'])
+    flat=[]
+    for response in latest.values():
+        seen=set()
+        for event_name in response['choices']:
+            if event_name in seen: continue
+            seen.add(event_name)
+            matches=roster.get(response['register_key'],[])
+            student_id=matches[0] if len(matches)==1 else None
+            error='' if student_id else ('Register number matches multiple student records.' if len(matches)>1 else 'No exact student roster match.')
+            flat.append((response['row_number'],response['register_no'],response['name'],event_name,student_id,error))
+    for response in missing_register_rows:
+        for event_name in response['choices']:
+            flat.append((response['row_number'],'',response['name'],event_name,None,'Response is missing a register number.'))
+    if not flat:
+        flash('The responses contain no selected YRC activities to import.','error'); return redirect(url_for('participation_import'))
+    batch_id=secrets.token_urlsafe(24)
+    try:
+        conn.execute('DELETE FROM participation_import_rows WHERE batch_id IN (SELECT id FROM participation_import_batches WHERE status="Preview" AND created_at < datetime("now","-1 day"))')
+        conn.execute('DELETE FROM participation_import_batches WHERE status="Preview" AND created_at < datetime("now","-1 day")')
+        conn.execute('INSERT INTO participation_import_batches(id,admin_id,filename,response_count,unique_respondents,repeated_respondents,missing_register_count,record_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
+                     (batch_id,session['admin_id'],os.path.basename(upload.filename)[:180],response_count,len(latest),len(responses)-len(latest),len(missing_register_rows),len(flat),'Preview'))
+        conn.executemany('INSERT INTO participation_import_rows(batch_id,source_row,register_no,student_name,event_name,student_id,error) VALUES(?,?,?,?,?,?,?)',
+                         [(batch_id,*item) for item in flat])
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback(); flash('The sheet could not be staged for review. No records were imported.','error'); return redirect(url_for('participation_import'))
+    return redirect(url_for('participation_import_review',batch_id=batch_id))
+
+@app.get('/attendance/import/<batch_id>')
+@login_required
+def participation_import_review(batch_id):
+    preview=participation_import_preview(batch_id)
+    if not preview:
+        flash('That import preview expired or was already completed. Upload the sheet again to start a new preview.','error')
+        return redirect(url_for('participation_import'))
+    return render_template('participation_import.html',preview=preview,recent=[])
+
+@app.post('/attendance/import/<batch_id>/cancel')
+@login_required
+def participation_import_cancel(batch_id):
+    conn=db()
+    conn.execute('DELETE FROM participation_import_rows WHERE batch_id=? AND EXISTS (SELECT 1 FROM participation_import_batches WHERE id=? AND status="Preview")',(batch_id,batch_id))
+    conn.execute('UPDATE participation_import_batches SET status="Cancelled" WHERE id=? AND status="Preview"',(batch_id,))
+    conn.commit()
+    flash('Import preview cancelled. Its staged student details were removed.','success')
+    return redirect(url_for('participation_import'))
+
+@app.post('/attendance/import/<batch_id>/confirm')
+@login_required
+def participation_import_confirm(batch_id):
+    preview=participation_import_preview(batch_id)
+    if not preview:
+        flash('That import preview expired or was already completed.','error'); return redirect(url_for('participation_import'))
+    if preview['ambiguous_count']:
+        flash('Some activities match multiple existing events. Resolve duplicate event names before importing.','error')
+        return redirect(url_for('participation_import_review',batch_id=batch_id))
+    if preview['unmatched_count'] and request.form.get('skip_unmatched')!='1':
+        flash('Review the unmatched students, or select the option to skip them explicitly.','error')
+        return redirect(url_for('participation_import_review',batch_id=batch_id))
+    dates={}
+    for index,event in enumerate(preview['events']):
+        if event['to_import'] and not event['event']:
+            event_date=request.form.get(event['date_field'],'').strip()
+            try: date.fromisoformat(event_date)
+            except ValueError:
+                flash('Choose an event date for each new event before importing. Sheet submission timestamps are not used as event dates.','error')
+                return redirect(url_for('participation_import_review',batch_id=batch_id))
+            dates[event['name']]=event_date
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        rows=conn.execute('SELECT * FROM participation_import_rows WHERE batch_id=? ORDER BY id',(batch_id,)).fetchall()
+        active_events=conn.execute("SELECT * FROM events WHERE status<>'Cancelled'").fetchall()
+        event_ids={}
+        for event in preview['events']:
+            if not event['to_import']: continue
+            key=normalize_import_key(canonical_event_name(event['name']))
+            matches=[candidate for candidate in active_events if normalize_import_key(canonical_event_name(candidate['name']))==key]
+            if len(matches)>1: raise ValueError('Multiple matching events')
+            existing=matches[0] if matches else None
+            if existing:
+                event_ids[event['name']]=existing['id']
+                if existing['name']!=canonical_event_name(event['name']) and canonical_event_name(event['name'])=='Ethnic Day':
+                    conn.execute("UPDATE events SET name='Ethnic Day' WHERE id=?",(existing['id'],))
+            else:
+                cur=conn.execute('INSERT INTO events(name,description,event_date,status) VALUES(?,?,?,?)',
+                                 (canonical_event_name(event['name']),'Imported from YRC participation sheet',dates[event['name']],'Completed'))
+                event_ids[event['name']]=cur.lastrowid
+        imported=0; skipped=0
+        current_roster={}
+        for student_row in conn.execute('SELECT id,register_no FROM students').fetchall():
+            current_roster.setdefault(normalize_register_no(student_row['register_no']),[]).append(student_row['id'])
+        for row in rows:
+            if not row['register_no']:
+                skipped+=1; continue
+            event_id=event_ids.get(row['event_name'])
+            if not event_id:
+                skipped+=1; continue
+            current_matches=current_roster.get(normalize_register_no(row['register_no']),[])
+            if len(current_matches)!=1:
+                skipped+=1; continue
+            student_id=current_matches[0]
+            old=conn.execute('SELECT status FROM attendance WHERE event_id=? AND student_id=?',(event_id,student_id)).fetchone()
+            if old and old['status']=='Present':
+                skipped+=1; continue
+            conn.execute('INSERT INTO event_participants(event_id,student_id,selected_by,selection_status) VALUES(?,?,?,"Selected") ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status="Selected",selected_by=excluded.selected_by',
+                         (event_id,student_id,session['admin_id']))
+            conn.execute('INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,"Present",?) ON CONFLICT(event_id,student_id) DO UPDATE SET status="Present",marked_at=CURRENT_TIMESTAMP,marked_by=excluded.marked_by',
+                         (event_id,student_id,session['admin_id']))
+            conn.execute('INSERT INTO credits(event_id,student_id,credit_points,status,updated_by) VALUES(?,?,0,"Pending",?) ON CONFLICT(event_id,student_id) DO NOTHING',
+                         (event_id,student_id,session['admin_id']))
+            imported+=1
+        conn.execute('UPDATE participation_import_batches SET status="Completed",imported_count=?,skipped_count=?,completed_at=CURRENT_TIMESTAMP WHERE id=?',
+                     (imported,skipped,batch_id))
+        conn.execute('DELETE FROM participation_import_rows WHERE batch_id=?',(batch_id,))
+        audit('Participation sheet imported','participation_import',0,'',f'{imported} records; batch {batch_id}')
+        conn.commit()
+    except (sqlite3.Error,KeyError,ValueError):
+        conn.rollback(); flash('The import could not be completed. No partial records were saved. Review the preview and try again.','error')
+        return redirect(url_for('participation_import_review',batch_id=batch_id))
+    flash(f'Import complete: {imported} participation record(s) added or updated; {skipped} skipped. The next import will not duplicate these attended records.','success')
+    return redirect(url_for('attendance_page'))
 
 @app.get('/selection')
 @login_required

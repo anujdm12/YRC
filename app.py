@@ -943,7 +943,7 @@ def event_permanent_delete(eid):
 @app.post('/events/<int:eid>/recommend')
 @login_required
 def recommend(eid):
-        conn=db(); event=conn.execute('SELECT * FROM events WHERE id=?',(eid,)).fetchone()
+    conn=db(); event=conn.execute('SELECT * FROM events WHERE id=?',(eid,)).fetchone()
     if not event: return redirect(url_for('events'))
     already=conn.execute("SELECT COUNT(*) FROM event_participants WHERE event_id=? AND selection_status='Selected'",(eid,)).fetchone()[0]
     capacity=event['max_participants'] if event['max_participants'] is not None else 100000

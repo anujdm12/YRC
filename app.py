@@ -430,16 +430,19 @@ def participation_import_preview(batch_id):
         matched_event=matches[0] if len(matches)==1 else None
         ambiguous=len(matches)>1
         if ambiguous: ambiguous_count+=1
+        present_students=set()
+        if matched_event:
+            present_students={row[0] for row in conn.execute(
+                "SELECT student_id FROM attendance WHERE event_id=? AND status='Present'",
+                (matched_event['id'],)).fetchall()}
         ready=[]
         event_already=0
         event_unmatched=0
         for row in rows:
             if not row['student_id']:
                 event_unmatched+=1; unmatched.append(row); continue
-            if matched_event:
-                attendance=conn.execute('SELECT status FROM attendance WHERE event_id=? AND student_id=?',(matched_event['id'],row['student_id'])).fetchone()
-                if attendance and attendance['status']=='Present':
-                    event_already+=1; already_count+=1; continue
+            if matched_event and row['student_id'] in present_students:
+                event_already+=1; already_count+=1; continue
             ready.append(row)
         importable_count+=len(ready)
         summaries.append({'name':event_name,'rows':len(rows),'matched':len(rows)-event_unmatched,'unmatched':event_unmatched,
@@ -585,6 +588,7 @@ def participation_import_confirm(batch_id):
             dates[event['name']]=event_date
     conn=db()
     try:
+        conn.commit()
         conn.execute('BEGIN IMMEDIATE')
         rows=conn.execute('SELECT * FROM participation_import_rows WHERE batch_id=? ORDER BY id',(batch_id,)).fetchall()
         active_events=conn.execute("SELECT * FROM events WHERE status<>'Cancelled'").fetchall()
@@ -603,11 +607,19 @@ def participation_import_confirm(batch_id):
                 cur=conn.execute('INSERT INTO events(name,description,event_date,status) VALUES(?,?,?,?)',
                                  (canonical_event_name(event['name']),'Imported from YRC participation sheet',dates[event['name']],'Completed'))
                 event_ids[event['name']]=cur.lastrowid
-        imported=0; skipped=0
+        skipped=0
         current_roster_by_reg={}; current_roster_by_name={}
         for student_row in conn.execute('SELECT id,register_no,name FROM students').fetchall():
             current_roster_by_reg.setdefault(normalize_register_no(student_row['register_no']),[]).append(student_row['id'])
             current_roster_by_name.setdefault(normalize_student_name(student_row['name']),[]).append(student_row['id'])
+        event_id_values=list(set(event_ids.values()))
+        present_pairs=set()
+        if event_id_values:
+            placeholders=','.join('?' for _ in event_id_values)
+            present_pairs={(item['event_id'],item['student_id']) for item in conn.execute(
+                f"SELECT event_id,student_id FROM attendance WHERE status='Present' AND event_id IN ({placeholders})",
+                event_id_values).fetchall()}
+        participants_to_add=[]; attendance_to_add=[]; credits_to_add=[]; queued_pairs=set()
         for row in rows:
             event_id=event_ids.get(row['event_name'])
             if not event_id:
@@ -615,16 +627,19 @@ def participation_import_confirm(batch_id):
             student_id,match_method,error=resolve_import_student(row['register_no'],row['student_name'],current_roster_by_reg,current_roster_by_name)
             if not student_id:
                 skipped+=1; continue
-            old=conn.execute('SELECT status FROM attendance WHERE event_id=? AND student_id=?',(event_id,student_id)).fetchone()
-            if old and old['status']=='Present':
+            pair=(event_id,student_id)
+            if pair in present_pairs or pair in queued_pairs:
                 skipped+=1; continue
-            conn.execute('INSERT INTO event_participants(event_id,student_id,selected_by,selection_status) VALUES(?,?,?,"Selected") ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status="Selected",selected_by=excluded.selected_by',
-                         (event_id,student_id,session['admin_id']))
-            conn.execute('INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,"Present",?) ON CONFLICT(event_id,student_id) DO UPDATE SET status="Present",marked_at=CURRENT_TIMESTAMP,marked_by=excluded.marked_by',
-                         (event_id,student_id,session['admin_id']))
-            conn.execute('INSERT INTO credits(event_id,student_id,credit_points,status,updated_by) VALUES(?,?,0,"Pending",?) ON CONFLICT(event_id,student_id) DO NOTHING',
-                         (event_id,student_id,session['admin_id']))
-            imported+=1
+            queued_pairs.add(pair)
+            participants_to_add.append((event_id,student_id,session['admin_id'],'Selected'))
+            attendance_to_add.append((event_id,student_id,'Present',session['admin_id']))
+            credits_to_add.append((event_id,student_id,0,'Pending',session['admin_id']))
+        if participants_to_add:
+            conn.executemany('INSERT INTO event_participants(event_id,student_id,selected_by,selection_status) VALUES(?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status=excluded.selection_status,selected_by=excluded.selected_by',participants_to_add)
+            marked_at_expression='CURRENT_TIMESTAMP::text' if USING_POSTGRES else 'CURRENT_TIMESTAMP'
+            conn.executemany(f'INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET status=excluded.status,marked_at={marked_at_expression},marked_by=excluded.marked_by',attendance_to_add)
+            conn.executemany('INSERT INTO credits(event_id,student_id,credit_points,status,updated_by) VALUES(?,?,?,?,?) ON CONFLICT(event_id,student_id) DO NOTHING',credits_to_add)
+        imported=len(attendance_to_add)
         conn.execute('UPDATE participation_import_batches SET status="Completed",imported_count=?,skipped_count=?,completed_at=CURRENT_TIMESTAMP WHERE id=?',
                      (imported,skipped,batch_id))
         conn.execute('DELETE FROM participation_import_rows WHERE batch_id=?',(batch_id,))

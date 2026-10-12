@@ -1,1 +1,26 @@
-{% extends 'base.html' %}{% block title %}Reports{% endblock %}{% block crumb %}REPORTS{% endblock %}{% block content %}<div class="page-heading"><div><div class="eyebrow">RECOGNIZE SERVICE</div><h1>Reports</h1><p class="subhead">Credit records, attendance summaries, and participation equity.</p></div><a class="btn primary" href="/reports/students.csv">⇩ Export student credits</a></div><section class="panel"><div class="panel-head"><div><h2>Student credit report</h2><p>Verified participation and awarded credit totals</p></div><span class="count-pill">{{rows|length}} students</span></div><div class="table-scroll"><table><thead><tr><th>REGISTER NO.</th><th>STUDENT</th><th>DEPARTMENT</th><th>CLASS</th><th>SECTION</th><th>EVENTS</th><th>CREDITS</th><th>LAST PARTICIPATION</th><th>FAIRNESS</th></tr></thead><tbody>{% for r in rows %}<tr><td>{{r.register_no}}</td><td class="table-title">{{r.name}}</td><td>{{r.department}}</td><td>{{r.class_name}}</td><td>{{r.section or "Unassigned"}}</td><td>{{r.events}}</td><td><b>{{'%.0f'|format(r.credits)}}</b></td><td>{{r.last_event or 'Never'}}</td><td><span class="badge {{'active' if r.events==0 else 'upcoming' if r.events<3 else 'completed'}}">{{'Priority' if r.events==0 else 'Consider' if r.events<3 else 'Balanced'}}</span></td></tr>{% endfor %}</tbody></table></div></section><section class="panel reports-events"><div class="panel-head"><div><h2>Event attendance report</h2><p>Selected vs. recorded attendance by activity</p></div></div><div class="table-scroll"><table><thead><tr><th>EVENT</th><th>DATE</th><th>SELECTED</th><th>PRESENT</th><th>ABSENT</th></tr></thead><tbody>{% for e in events %}<tr><td class="table-title">{{e.name}}</td><td>{{e.event_date}}</td><td>{{e.selected}}</td><td><span class="badge present">{{e.present}}</span></td><td>{{e.absent}}</td></tr>{% else %}<tr><td colspan="5" class="empty-cell">No event attendance to report yet.</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Reports{% endblock %}
+{% block crumb %}REPORTS{% endblock %}
+{% macro student_table(group, empty_message) %}
+<div class="table-scroll"><table><thead><tr><th>REGISTER NO.</th><th>STUDENT</th><th>DEPARTMENT</th><th>CLASS</th><th>SECTION</th><th>EVENTS</th><th>LAST PARTICIPATION</th></tr></thead><tbody>
+{% for r in group %}<tr><td>{{r.register_no}}</td><td class="table-title">{{r.name}}</td><td>{{r.department}}</td><td>{{r.class_name}}</td><td>{{r.section or 'Unassigned'}}</td><td>{{r.events}}</td><td>{{r.last_event or 'Never'}}</td></tr>
+{% else %}<tr><td colspan="7" class="empty-cell">{{empty_message}}</td></tr>{% endfor %}
+</tbody></table></div>
+{% endmacro %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">RECOGNIZE SERVICE</div><h1>Reports</h1><p class="subhead">Attendance priorities help the team invite more volunteers to upcoming activities.</p></div><div class="heading-actions"><a class="btn secondary" href="/reports/students.csv">Export student credits</a><a class="btn primary" href="/reports/priority-students.csv">Download high-priority list</a></div></div>
+
+<div class="stats-grid reports-priority-summary">
+<article class="stat-card"><span class="stat-label">HIGH PRIORITY</span><strong>{{high_priority|length}}</strong><span class="stat-foot">Active students with no attended events</span></article>
+<article class="stat-card"><span class="stat-label">CONSIDERED</span><strong>{{considered|length}}</strong><span class="stat-foot">Attended 1 or 2 events</span></article>
+<article class="stat-card"><span class="stat-label">BALANCED</span><strong>{{balanced|length}}</strong><span class="stat-foot">Attended 3 or more events</span></article>
+</div>
+
+<section class="panel report-priority high-priority"><div class="panel-head"><div><h2>1. High priority</h2><p>Active students who have not attended any event yet. Invite them to join a future activity.</p></div><div class="heading-actions"><span class="count-pill">{{high_priority|length}} students</span><a class="btn primary small" href="/reports/priority-students.csv">Download CSV</a></div></div>{{student_table(high_priority, 'Everyone active has attended at least one event.')}}</section>
+
+<section class="panel report-priority"><div class="panel-head"><div><h2>2. Considered</h2><p>Students with one or two attended events who may benefit from another opportunity.</p></div><span class="count-pill">{{considered|length}} students</span></div>{{student_table(considered, 'No students in this group right now.')}}</section>
+
+<section class="panel report-priority"><div class="panel-head"><div><h2>3. Balanced</h2><p>Students with three or more attended events, showing broader participation.</p></div><span class="count-pill">{{balanced|length}} students</span></div>{{student_table(balanced, 'No students in this group right now.')}}</section>
+
+<section class="panel reports-events"><div class="panel-head"><div><h2>Event attendance report</h2><p>Selected volunteers and recorded attendance by activity</p></div></div><div class="table-scroll"><table><thead><tr><th>EVENT</th><th>DATE</th><th>SELECTED</th><th>PRESENT</th><th>ABSENT</th></tr></thead><tbody>{% for e in events %}<tr><td class="table-title">{{e.name}}</td><td>{{e.event_date}}</td><td>{{e.selected}}</td><td><span class="badge present">{{e.present}}</span></td><td>{{e.absent}}</td></tr>{% else %}<tr><td colspan="5" class="empty-cell">No event attendance to report yet.</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

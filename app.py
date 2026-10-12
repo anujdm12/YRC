@@ -773,9 +773,12 @@ def mark_attendance(eid,sid):
 @app.get('/reports')
 @login_required
 def reports():
-    conn=db(); rows=conn.execute('SELECT s.register_no,s.name,s.department,s.class_name,s.section,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT COALESCE(SUM(c.credit_points),0) FROM credits c WHERE c.student_id=s.id AND c.status="Awarded") credits,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event FROM students s ORDER BY events,credits').fetchall()
+    conn=db(); rows=conn.execute('SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT COALESCE(SUM(c.credit_points),0) FROM credits c WHERE c.student_id=s.id AND c.status="Awarded") credits,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event FROM students s WHERE s.yrc_status="Active" ORDER BY events,credits,s.name').fetchall()
     evrows=conn.execute('SELECT e.name,e.event_date,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e ORDER BY e.event_date DESC').fetchall()
-    return render_template('reports.html',rows=rows,events=evrows)
+    return render_template('reports.html',rows=rows,events=evrows,
+                           high_priority=[r for r in rows if r['events']==0],
+                           considered=[r for r in rows if 0<r['events']<3],
+                           balanced=[r for r in rows if r['events']>=3])
 
 @app.get('/credits')
 @login_required
@@ -812,6 +815,21 @@ def students_csv():
     buf=io.StringIO(); writer=csv.writer(buf); writer.writerow(['Register No','Name','Department','Class','Section','Events','Credits']); writer.writerows([tuple(r) for r in rows])
     from flask import Response
     return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-student-credits.csv'})
+
+@app.get('/reports/priority-students.csv')
+@login_required
+def priority_students_csv():
+    import csv, io
+    rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone
+        FROM students s WHERE s.yrc_status='Active'
+        AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.student_id=s.id AND a.status='Present')
+        ORDER BY s.department,s.class_name,s.name''').fetchall()
+    buf=io.StringIO(newline=''); writer=csv.writer(buf)
+    writer.writerow(['Register No','Name','Department','Class','Section','Email','Phone','Priority'])
+    for row in rows:
+        values=[row['register_no'],row['name'],row['department'],row['class_name'],row['section'],row['email'],row['phone'],'High - no events attended']
+        writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
+    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-high-priority-students.csv'})
 
 @app.get('/settings')
 @login_required

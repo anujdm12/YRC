@@ -481,6 +481,9 @@ def participation_import():
     timestamp_col=next((h for key,h in normalized.items() if key=='timestamp'),None)
     other_col=next((h for key,h in normalized.items() if key=='column 1'),None)
     if not name_col or not register_col or not activity_col:
+        if 'event name' in normalized and 'attendee count' in normalized:
+            flash('This CSV contains event totals, not individual student responses. It has no student names or register numbers, so attendance cannot be assigned. Export the original Google Forms responses tab as CSV and upload that file. No data was imported.','error')
+            return redirect(url_for('participation_import'))
         found=', '.join(headers[:8]) or 'no headers found'
         flash(f'Could not identify Full Name, Register Number, and the YRC activities question columns. Headers found: {found}. Upload the Google Forms response CSV, not the student roster CSV. No data was imported.','error')
         return redirect(url_for('participation_import'))

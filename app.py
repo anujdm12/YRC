@@ -663,7 +663,9 @@ def fair_selection():
         LEFT JOIN events e ON e.id=a.event_id
         WHERE s.yrc_status='Active'
         GROUP BY s.id
-        ORDER BY events_attended ASC, CASE WHEN last_event IS NULL THEN 0 ELSE 1 END ASC,last_event ASC,s.name ASC
+        ORDER BY events_attended ASC,
+        CASE WHEN MAX(CASE WHEN a.status='Present' THEN e.event_date END) IS NULL THEN 0 ELSE 1 END ASC,
+        last_event ASC,s.name ASC
         LIMIT 50''').fetchall()
     return render_template('fair_selection.html',events=eligible_events,students=students)
 
@@ -713,11 +715,13 @@ def recommend(eid):
     already=conn.execute("SELECT COUNT(*) FROM event_participants WHERE event_id=? AND selection_status='Selected'",(eid,)).fetchone()[0]
     capacity=event['max_participants'] if event['max_participants'] is not None else 100000
     limit=max(0,capacity-already)
-    candidates=conn.execute('''SELECT s.id,COUNT(DISTINCT CASE WHEN a.status='Present' THEN a.event_id END) attended,
-      (SELECT COUNT(*) FROM selection_history h WHERE h.student_id=s.id AND h.decision='Selected' AND h.event_id<>?) offers
+    candidates=conn.execute('''SELECT id,attended,offers FROM (
+      SELECT s.id,COUNT(DISTINCT CASE WHEN a.status='Present' THEN a.event_id END) attended,
+        (SELECT COUNT(*) FROM selection_history h WHERE h.student_id=s.id AND h.decision='Selected' AND h.event_id<>?) offers
       FROM students s LEFT JOIN attendance a ON a.student_id=s.id
       WHERE s.yrc_status='Active' AND s.id NOT IN (SELECT student_id FROM event_participants WHERE event_id=? AND selection_status='Selected')
-      GROUP BY s.id ORDER BY (attended*100+offers), RANDOM() LIMIT ?''',(eid,eid,limit)).fetchall()
+      GROUP BY s.id
+    ) AS candidate_scores ORDER BY (attended*100+offers), RANDOM() LIMIT ?''',(eid,eid,limit)).fetchall()
     for rank,c in enumerate(candidates,1):
         score=c['attended']*100+c['offers']
         conn.execute('INSERT INTO event_participants(event_id,student_id,selected_by,selection_status) VALUES(?,?,? ,?) ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status="Selected",selected_at=CURRENT_TIMESTAMP,selected_by=excluded.selected_by',(eid,c['id'],session['admin_id'],'Selected'))

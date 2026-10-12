@@ -133,5 +133,5 @@ def connect_db(path=None):
 
 
 def _hybrid_row_factory(cursor):
-    columns = [column.name for column in cursor.description]
+    columns = [column.name for column in cursor.description] if cursor.description else []
     return lambda values: HybridRow(values, columns)

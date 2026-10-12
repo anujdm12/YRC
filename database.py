@@ -48,6 +48,9 @@ class CursorProxy:
     def fetchall(self):
         return self._cursor.fetchall()
 
+    def __iter__(self):
+        return iter(self._cursor)
+
 
 class PostgresConnection:
     _RETURNING_TABLES = {'admins', 'students', 'events'}

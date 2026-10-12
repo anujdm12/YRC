@@ -468,16 +468,21 @@ def participation_import():
         try: text=raw.decode('cp1252')
         except UnicodeDecodeError:
             flash('The CSV encoding could not be read. Export the sheet as CSV and try again.','error'); return redirect(url_for('participation_import'))
-    reader=csv.DictReader(io.StringIO(text))
+    try: dialect=csv.Sniffer().sniff(text[:8192],delimiters=',;\t')
+    except csv.Error: dialect=csv.excel
+    reader=csv.DictReader(io.StringIO(text),dialect=dialect)
     headers=reader.fieldnames or []
     normalized={re.sub(r'[^a-z0-9]+',' ',h.casefold()).strip():h for h in headers}
-    name_col=next((h for key,h in normalized.items() if 'full name' in key),None)
-    register_col=next((h for key,h in normalized.items() if 'register number' in key),None)
-    activity_col=next((h for key,h in normalized.items() if 'participated in so far' in key),None)
+    name_col=next((h for key,h in normalized.items() if 'full name' in key or 'student name' in key or key in ('name','your name')),None)
+    register_col=next((h for key,h in normalized.items() if (('register' in key or 'registration' in key) and ('number' in key or 'no' in key)) or key in ('usn','usn no')),None)
+    activity_col=next((h for key,h in normalized.items() if 'participated in so far' in key or
+                       ('yrc' in key and ('activity' in key or 'event' in key)) or
+                       ('activities' in key and ('participat' in key or 'attend' in key))),None)
     timestamp_col=next((h for key,h in normalized.items() if key=='timestamp'),None)
     other_col=next((h for key,h in normalized.items() if key=='column 1'),None)
     if not name_col or not register_col or not activity_col:
-        flash('This file needs Full Name, Register Number, and the YRC activities question columns. No data was imported.','error')
+        found=', '.join(headers[:8]) or 'no headers found'
+        flash(f'Could not identify Full Name, Register Number, and the YRC activities question columns. Headers found: {found}. Upload the Google Forms response CSV, not the student roster CSV. No data was imported.','error')
         return redirect(url_for('participation_import'))
     responses=[]
     missing_register_rows=[]

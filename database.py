@@ -63,6 +63,7 @@ class PostgresConnection:
         schema = re.sub(r'\bid INTEGER PRIMARY KEY\b', 'id BIGSERIAL PRIMARY KEY', schema)
         schema = re.sub(r'\bINTEGER\b', 'BIGINT', schema)
         schema = re.sub(r'\bREAL\b', 'DOUBLE PRECISION', schema)
+        schema = re.sub(r'\bTEXT DEFAULT CURRENT_TIMESTAMP\b', 'TEXT DEFAULT (CURRENT_TIMESTAMP::text)', schema, flags=re.IGNORECASE)
         return schema
 
     def execute(self, sql, parameters=()):
@@ -81,8 +82,9 @@ class PostgresConnection:
         if sql.upper() == 'BEGIN IMMEDIATE':
             sql = 'BEGIN'
         if 'datetime("now","-1 day")' in sql:
-            sql = sql.replace('datetime("now","-1 day")', "(CURRENT_TIMESTAMP - INTERVAL '1 day')")
+            sql = sql.replace('datetime("now","-1 day")', "TO_CHAR(CURRENT_TIMESTAMP - INTERVAL '1 day', 'YYYY-MM-DD HH24:MI:SS')")
         sql = re.sub(r'"([A-Za-z][A-Za-z0-9 _-]*)"', r"'\1'", sql)
+        sql = re.sub(r'=\s*CURRENT_TIMESTAMP\b', '=CURRENT_TIMESTAMP::text', sql, flags=re.IGNORECASE)
         sql = re.sub(r'\bLIKE\b', 'ILIKE', sql, flags=re.IGNORECASE)
         sql = re.sub(r'\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', sql, flags=re.IGNORECASE)
         if raw_sql.upper().startswith('INSERT OR IGNORE') and 'ON CONFLICT' not in sql.upper():

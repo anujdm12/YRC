@@ -1,11 +1,9 @@
 import os
-import sqlite3
 import secrets
 import time
 import click
 import csv
 import io
-import math
 import re
 import unicodedata
 from datetime import datetime, date
@@ -30,13 +28,10 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS admin_roles(admin_id INTEGER PRIMARY KEY REFERENCES admins(id) ON DELETE CASCADE, role TEXT NOT NULL DEFAULT 'super_admin', department TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS students(id INTEGER PRIMARY KEY, register_no TEXT UNIQUE NOT NULL, name TEXT NOT NULL, department TEXT NOT NULL, class_name TEXT NOT NULL DEFAULT '', section TEXT NOT NULL DEFAULT '', year INTEGER NOT NULL, email TEXT, phone TEXT, yrc_status TEXT NOT NULL DEFAULT 'Active', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, event_date TEXT NOT NULL, start_time TEXT, end_time TEXT, venue TEXT, max_participants INTEGER, credit_points REAL NOT NULL DEFAULT 0, deadline TEXT, status TEXT NOT NULL DEFAULT 'Upcoming', semester_label TEXT NOT NULL DEFAULT '', credit_activity_type TEXT NOT NULL DEFAULT 'Not eligible', event_scope TEXT NOT NULL DEFAULT 'Internal', credit_hours REAL NOT NULL DEFAULT 0, course_sessions_total INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, event_date TEXT NOT NULL, start_time TEXT, end_time TEXT, venue TEXT, max_participants INTEGER, deadline TEXT, status TEXT NOT NULL DEFAULT 'Upcoming', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS event_participants(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE, student_id INTEGER NOT NULL REFERENCES students(id), selection_status TEXT NOT NULL DEFAULT 'Selected', selected_at TEXT DEFAULT CURRENT_TIMESTAMP, selected_by INTEGER, UNIQUE(event_id,student_id));
 CREATE TABLE IF NOT EXISTS selection_history(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, decision TEXT NOT NULL, attended_count INTEGER NOT NULL DEFAULT 0, seat_offers INTEGER NOT NULL DEFAULT 0, priority_score INTEGER NOT NULL DEFAULT 0, tie_break TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', decided_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS attendance(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, status TEXT NOT NULL, marked_at TEXT DEFAULT CURRENT_TIMESTAMP, marked_by INTEGER, UNIQUE(event_id,student_id), FOREIGN KEY(event_id,student_id) REFERENCES event_participants(event_id,student_id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS credits(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, credit_points REAL NOT NULL, status TEXT NOT NULL DEFAULT 'Awarded', awarded_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_by INTEGER, UNIQUE(event_id,student_id), FOREIGN KEY(event_id,student_id) REFERENCES event_participants(event_id,student_id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS semester_credit_awards(id INTEGER PRIMARY KEY, student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE, semester_label TEXT NOT NULL, credit_points REAL NOT NULL DEFAULT 1, outside_activity_count INTEGER NOT NULL DEFAULT 0, inside_activity_hours REAL NOT NULL DEFAULT 0, qualification TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'In progress', community_marks REAL NOT NULL DEFAULT 0, certificate_marks REAL NOT NULL DEFAULT 0, awarded_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_by INTEGER, UNIQUE(student_id,semester_label));
-CREATE TABLE IF NOT EXISTS activity_assessments(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, learning_words INTEGER NOT NULL DEFAULT 0, society_words INTEGER NOT NULL DEFAULT 0, personal_words INTEGER NOT NULL DEFAULT 0, geotag_photo INTEGER NOT NULL DEFAULT 0, report_evidence_verified INTEGER NOT NULL DEFAULT 0, report_mark REAL NOT NULL DEFAULT 0, sessions_attended INTEGER NOT NULL DEFAULT 0, certificate_received INTEGER NOT NULL DEFAULT 0, updated_by INTEGER, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(event_id,student_id), FOREIGN KEY(event_id,student_id) REFERENCES event_participants(event_id,student_id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS login_attempts(id INTEGER PRIMARY KEY, username TEXT NOT NULL, attempted_at INTEGER NOT NULL, success INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS admin_audit_logs(id INTEGER PRIMARY KEY, admin_id INTEGER, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS participation_import_batches(id TEXT PRIMARY KEY, admin_id INTEGER NOT NULL, filename TEXT NOT NULL, response_count INTEGER NOT NULL DEFAULT 0, unique_respondents INTEGER NOT NULL DEFAULT 0, repeated_respondents INTEGER NOT NULL DEFAULT 0, missing_register_count INTEGER NOT NULL DEFAULT 0, record_count INTEGER NOT NULL DEFAULT 0, imported_count INTEGER NOT NULL DEFAULT 0, skipped_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'Preview', created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT);
@@ -61,25 +56,6 @@ def init_db():
         conn.execute("ALTER TABLE students ADD COLUMN class_name TEXT NOT NULL DEFAULT ''")
     if 'section' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN section TEXT NOT NULL DEFAULT ''")
-    event_columns={row[1] for row in conn.execute('PRAGMA table_info(events)')}
-    if 'semester_label' not in event_columns:
-        conn.execute("ALTER TABLE events ADD COLUMN semester_label TEXT NOT NULL DEFAULT ''")
-    if 'credit_activity_type' not in event_columns:
-        conn.execute("ALTER TABLE events ADD COLUMN credit_activity_type TEXT NOT NULL DEFAULT 'Not eligible'")
-    if 'event_scope' not in event_columns:
-        conn.execute("ALTER TABLE events ADD COLUMN event_scope TEXT NOT NULL DEFAULT 'Internal'")
-    if 'credit_hours' not in event_columns:
-        conn.execute('ALTER TABLE events ADD COLUMN credit_hours REAL NOT NULL DEFAULT 0')
-    if 'course_sessions_total' not in event_columns:
-        conn.execute('ALTER TABLE events ADD COLUMN course_sessions_total INTEGER NOT NULL DEFAULT 0')
-    award_columns={row[1] for row in conn.execute('PRAGMA table_info(semester_credit_awards)')}
-    if 'community_marks' not in award_columns:
-        conn.execute('ALTER TABLE semester_credit_awards ADD COLUMN community_marks REAL NOT NULL DEFAULT 0')
-    if 'certificate_marks' not in award_columns:
-        conn.execute('ALTER TABLE semester_credit_awards ADD COLUMN certificate_marks REAL NOT NULL DEFAULT 0')
-    assessment_columns={row[1] for row in conn.execute('PRAGMA table_info(activity_assessments)')}
-    if 'report_evidence_verified' not in assessment_columns:
-        conn.execute('ALTER TABLE activity_assessments ADD COLUMN report_evidence_verified INTEGER NOT NULL DEFAULT 0')
     import_row_columns={row[1] for row in conn.execute('PRAGMA table_info(participation_import_rows)')}
     if 'match_method' not in import_row_columns:
         conn.execute("ALTER TABLE participation_import_rows ADD COLUMN match_method TEXT NOT NULL DEFAULT 'register_no'")
@@ -159,108 +135,6 @@ def login_required(fn):
 def audit(action, entity, entity_id, old='', new=''):
     db().execute('INSERT INTO admin_audit_logs(admin_id,action,entity_type,entity_id,old_value,new_value) VALUES(?,?,?,?,?,?)', (session.get('admin_id'), action, entity, entity_id, str(old), str(new)))
 
-def calculate_semester_result(activity_rows, prior_status):
-    # The PPTX applies the same 30-hour semester threshold across activity types.
-    # Internal/external describes the event location, not a different credit rule.
-    eligible_hours=sum(float(r['credit_hours'] or 0) for r in activity_rows if r['credit_activity_type'] in ('Community','Certificate'))
-    community_scores=[]; certificate_scores=[]
-    for row in activity_rows:
-        if row['credit_activity_type']=='Community':
-            complete=(int(row['learning_words'] or 0)>=100 and int(row['society_words'] or 0)>=50 and
-                      int(row['personal_words'] or 0)>=50 and bool(row['geotag_photo']) and bool(row['report_evidence_verified']))
-            community_scores.append(3+(float(row['report_mark'] or 0) if complete else 0))
-        elif row['credit_activity_type']=='Certificate':
-            total=int(row['course_sessions_total'] or 0); attended=int(row['sessions_attended'] or 0)
-            certificate_scores.append((15 if total>0 and attended*100>=total*85 else 0)+
-                                      (10 if row['certificate_received'] else 0))
-    community_marks=sum(sorted(community_scores,reverse=True)[:5])
-    certificate_marks=max(certificate_scores,default=0)
-    community_count=sum(1 for r in activity_rows if r['credit_activity_type']=='Community')
-    qualifies=eligible_hours>=30
-    status='Awarded' if qualifies else ('Review' if prior_status in ('Awarded','Review') else 'In progress')
-    basis='30 attended eligible activity hours = 1 academic credit' if qualifies else '30 attended eligible activity hours required for 1 academic credit'
-    if certificate_marks:
-        basis+=f'; certificate-course assessment {certificate_marks:g}/25'
-    return (1 if qualifies else 0,community_count,eligible_hours,basis,status,community_marks,certificate_marks,qualifies)
-
-def sync_semester_credit(conn, student_id, semester_label, admin_id=None):
-    """Recalculate one credit and its separate semester mark tracks."""
-    if not semester_label:
-        return
-    activity_rows=conn.execute('''SELECT e.id,e.credit_activity_type,e.credit_hours,e.course_sessions_total,
-        COALESCE(x.learning_words,0) learning_words,COALESCE(x.society_words,0) society_words,
-        COALESCE(x.personal_words,0) personal_words,COALESCE(x.geotag_photo,0) geotag_photo,
-        COALESCE(x.report_evidence_verified,0) report_evidence_verified,
-        COALESCE(x.report_mark,0) report_mark,COALESCE(x.sessions_attended,0) sessions_attended,
-        COALESCE(x.certificate_received,0) certificate_received
-        FROM attendance a JOIN events e ON e.id=a.event_id
-        LEFT JOIN activity_assessments x ON x.event_id=e.id AND x.student_id=a.student_id
-        WHERE a.student_id=? AND a.status='Present' AND e.semester_label=?''',
-        (student_id,semester_label)).fetchall()
-    current=conn.execute('SELECT status FROM semester_credit_awards WHERE student_id=? AND semester_label=?',
-                         (student_id,semester_label)).fetchone()
-    prior_status=current['status'] if current else None
-    credit_points,community_count,inside_hours,basis,status,community_marks,certificate_marks,qualifies=calculate_semester_result(activity_rows,prior_status)
-    conn.execute('''INSERT INTO semester_credit_awards(student_id,semester_label,credit_points,outside_activity_count,
-        inside_activity_hours,qualification,status,community_marks,certificate_marks,awarded_at,updated_by)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(student_id,semester_label) DO UPDATE SET
-        credit_points=excluded.credit_points,outside_activity_count=excluded.outside_activity_count,
-        inside_activity_hours=excluded.inside_activity_hours,qualification=excluded.qualification,status=excluded.status,
-        community_marks=excluded.community_marks,certificate_marks=excluded.certificate_marks,
-        awarded_at=CASE WHEN excluded.status='Awarded' AND semester_credit_awards.status<>'Awarded' THEN excluded.awarded_at ELSE semester_credit_awards.awarded_at END,
-        updated_by=excluded.updated_by''',
-        (student_id,semester_label,credit_points,community_count,inside_hours,basis,status,
-         community_marks,certificate_marks,datetime.now().isoformat(timespec='seconds') if qualifies else None,admin_id))
-    if qualifies and prior_status!='Awarded':
-        audit('Semester academic credit awarded automatically','semester_credit',student_id,'',
-              f'{semester_label}: 1 credit; {inside_hours:g} attended eligible activity hours; {community_marks:g}/25 community marks')
-    elif not qualifies and prior_status=='Awarded':
-        audit('Semester academic credit flagged for review','semester_credit',student_id,
-              f'{semester_label}: Awarded',f'{inside_hours:g}/30 attended activity hours; {community_marks:g}/25 marks')
-
-def sync_semester_credits_for_semesters(conn, semester_labels, admin_id=None):
-    """Refresh semester credit and assessment progress for affected terms."""
-    labels=sorted({label for label in semester_labels if label})
-    if not labels:
-        return
-    marks=','.join('?' for _ in labels)
-    activities=conn.execute(f'''SELECT a.student_id,e.semester_label,e.id,e.credit_activity_type,e.credit_hours,e.course_sessions_total,
-        COALESCE(x.learning_words,0) learning_words,COALESCE(x.society_words,0) society_words,
-        COALESCE(x.personal_words,0) personal_words,COALESCE(x.geotag_photo,0) geotag_photo,
-        COALESCE(x.report_evidence_verified,0) report_evidence_verified,COALESCE(x.report_mark,0) report_mark,
-        COALESCE(x.sessions_attended,0) sessions_attended,COALESCE(x.certificate_received,0) certificate_received
-        FROM attendance a JOIN events e ON e.id=a.event_id
-        LEFT JOIN activity_assessments x ON x.event_id=e.id AND x.student_id=a.student_id
-        WHERE a.status='Present' AND e.semester_label IN ({marks})''',labels).fetchall()
-    existing=conn.execute(f'''SELECT student_id,semester_label,status FROM semester_credit_awards
-        WHERE semester_label IN ({marks})''',labels).fetchall()
-    activity_by_key={}
-    for row in activities:
-        activity_by_key.setdefault((row['student_id'],row['semester_label']),[]).append(row)
-    existing_by_key={(r['student_id'],r['semester_label']):r['status'] for r in existing}
-    keys=set(activity_by_key)|set(existing_by_key); updates=[]
-    for student_id,semester_label in keys:
-        result=calculate_semester_result(activity_by_key.get((student_id,semester_label),[]),existing_by_key.get((student_id,semester_label)))
-        credit_points,community_count,inside_hours,basis,status,community_marks,certificate_marks,qualifies=result
-        updates.append((student_id,semester_label,credit_points,community_count,inside_hours,basis,status,community_marks,certificate_marks,
-                       datetime.now().isoformat(timespec='seconds') if qualifies else None,admin_id))
-        prior=existing_by_key.get((student_id,semester_label))
-        if qualifies and prior!='Awarded':
-            audit('Semester academic credit awarded automatically','semester_credit',student_id,'',
-                  f'{semester_label}: 1 credit; {inside_hours:g} attended eligible activity hours; {community_marks:g}/25 community marks')
-        elif not qualifies and prior=='Awarded':
-            audit('Semester academic credit flagged for review','semester_credit',student_id,
-                  f'{semester_label}: Awarded',f'{inside_hours:g}/30 attended activity hours; {community_marks:g}/25 marks')
-    if updates:
-        conn.executemany('''INSERT INTO semester_credit_awards(student_id,semester_label,credit_points,outside_activity_count,
-            inside_activity_hours,qualification,status,community_marks,certificate_marks,awarded_at,updated_by)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(student_id,semester_label) DO UPDATE SET
-            credit_points=excluded.credit_points,outside_activity_count=excluded.outside_activity_count,
-            inside_activity_hours=excluded.inside_activity_hours,qualification=excluded.qualification,status=excluded.status,
-            community_marks=excluded.community_marks,certificate_marks=excluded.certificate_marks,
-            awarded_at=CASE WHEN excluded.status='Awarded' AND semester_credit_awards.status<>'Awarded' THEN excluded.awarded_at ELSE semester_credit_awards.awarded_at END,
-            updated_by=excluded.updated_by''',updates)
-
 @app.route('/login', methods=['GET','POST'])
 def login():
     if request.method == 'POST':
@@ -292,7 +166,6 @@ def dashboard():
       'events':conn.execute("SELECT COUNT(*) FROM events").fetchone()[0],
       'attendance':conn.execute("SELECT COUNT(DISTINCT a.student_id) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.status='Present' AND e.status<>'Cancelled'").fetchone()[0],
       'attendance_records':conn.execute("SELECT COUNT(*) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.status='Present' AND e.status<>'Cancelled'").fetchone()[0],
-      'credits':conn.execute("SELECT COALESCE((SELECT SUM(credit_points) FROM credits WHERE status='Awarded'),0)+COALESCE((SELECT SUM(credit_points) FROM semester_credit_awards WHERE status='Awarded'),0)").fetchone()[0],
     }
     dist=conn.execute('SELECT event_count, COUNT(*) AS total FROM (SELECT s.id, COUNT(DISTINCT a.event_id) event_count FROM students s LEFT JOIN attendance a ON a.student_id=s.id AND a.status="Present" WHERE s.yrc_status="Active" GROUP BY s.id) GROUP BY event_count').fetchall()
     buckets=[0,0,0,0]
@@ -328,7 +201,7 @@ def students():
     if dept: where.append('department=?'); args.append(dept)
     if section=='UNASSIGNED': where.append("section=''")
     elif section: where.append('section=?'); args.append(section)
-    sql='SELECT s.*, (SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events, (SELECT COALESCE(SUM(c.credit_points),0) FROM credits c WHERE c.student_id=s.id AND c.status="Awarded")+(SELECT COALESCE(SUM(sc.credit_points),0) FROM semester_credit_awards sc WHERE sc.student_id=s.id AND sc.status="Awarded") credits FROM students s'+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY s.name'
+    sql='SELECT s.*, (SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events FROM students s'+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY s.name'
     rows=conn.execute(sql,args).fetchall(); departments=[r[0] for r in conn.execute('SELECT DISTINCT department FROM students ORDER BY department')]
     return render_template('students.html', students=rows,q=q,status=status,department=dept,departments=departments,section=section)
 
@@ -377,11 +250,10 @@ def import_students():
 @app.get('/students/<int:sid>')
 @login_required
 def student_detail(sid):
-    s=db().execute('SELECT s.*,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT COALESCE(SUM(c.credit_points),0) FROM credits c WHERE c.student_id=s.id AND c.status="Awarded")+(SELECT COALESCE(SUM(sc.credit_points),0) FROM semester_credit_awards sc WHERE sc.student_id=s.id AND sc.status="Awarded") credits,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event,(SELECT COUNT(*) FROM events e WHERE e.status="Completed") total_events FROM students s WHERE s.id=?',(sid,)).fetchone()
+    s=db().execute('SELECT s.*,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event,(SELECT COUNT(*) FROM events e WHERE e.status="Completed") total_events FROM students s WHERE s.id=?',(sid,)).fetchone()
     if not s: return redirect(url_for('students'))
-    history=db().execute('SELECT e.name,e.event_date,a.status,COALESCE(c.credit_points,0) credits FROM attendance a JOIN events e ON e.id=a.event_id LEFT JOIN credits c ON c.event_id=a.event_id AND c.student_id=a.student_id WHERE a.student_id=? ORDER BY e.event_date DESC',(sid,)).fetchall()
-    semester_credits=db().execute('SELECT semester_label,credit_points,inside_activity_hours,community_marks,certificate_marks,qualification,status,awarded_at FROM semester_credit_awards WHERE student_id=? ORDER BY semester_label DESC',(sid,)).fetchall()
-    return render_template('student_detail.html',student=s,history=history,semester_credits=semester_credits)
+    history=db().execute('SELECT e.name,e.event_date,a.status FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=? ORDER BY e.event_date DESC',(sid,)).fetchall()
+    return render_template('student_detail.html',student=s,history=history)
 
 @app.post('/students/<int:sid>/status')
 @login_required
@@ -423,29 +295,17 @@ def events():
     if request.method=='POST':
         f=request.form
         name=f.get('name','').strip()
-        credit_type=f.get('credit_activity_type','Not eligible')
-        event_scope=f.get('event_scope','Internal')
-        semester_label=f.get('semester_label','').strip()
         try:
             date.fromisoformat(f.get('event_date',''))
             capacity=int(f.get('max_participants') or 0) or None
-            activity_hours=float(f.get('credit_hours') or 0)
-            course_sessions_total=int(f.get('course_sessions_total') or 0)
         except (TypeError,ValueError):
-            flash('Enter a valid date, seat capacity, and activity hours.','error'); return redirect(url_for('events'))
+            flash('Enter a valid date and seat capacity.','error'); return redirect(url_for('events'))
         status=f.get('status','Upcoming')
-        if (not name or (capacity is not None and capacity<1) or not math.isfinite(activity_hours) or activity_hours<0 or
-            credit_type not in ('Community','Certificate','Not eligible') or event_scope not in ('Internal','External') or len(semester_label)>40 or
-            (credit_type!='Not eligible' and not semester_label) or
-            (credit_type in ('Community','Certificate') and activity_hours<=0) or
-            (credit_type=='Certificate' and course_sessions_total<=0) or
+        if (not name or (capacity is not None and capacity<1) or
             status not in ('Draft','Upcoming','Open','Closed','Completed','Cancelled')):
-            flash('Check the event details. Creditable activities need a semester and hours; certificate courses also need a session count.','error'); return redirect(url_for('events'))
-        if credit_type=='Not eligible': semester_label=''
-        if credit_type=='Not eligible': activity_hours=0
-        if credit_type!='Certificate': course_sessions_total=0
-        cur=conn.execute('''INSERT INTO events(name,description,event_date,start_time,end_time,venue,max_participants,credit_points,deadline,status,semester_label,credit_activity_type,event_scope,credit_hours,course_sessions_total)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(name,f.get('description'),f['event_date'],f.get('start_time'),f.get('end_time'),f.get('venue'),capacity,0,f.get('deadline'),status,semester_label,credit_type,event_scope,activity_hours,course_sessions_total))
+            flash('Check the event details.','error'); return redirect(url_for('events'))
+        cur=conn.execute('''INSERT INTO events(name,description,event_date,start_time,end_time,venue,max_participants,deadline,status)
+            VALUES(?,?,?,?,?,?,?,?,?)''',(name,f.get('description'),f['event_date'],f.get('start_time'),f.get('end_time'),f.get('venue'),capacity,f.get('deadline'),status))
         audit('Event created','event',cur.lastrowid,'',f['name']); conn.commit(); flash('Event created.','success'); return redirect(url_for('events'))
     q=request.args.get('q','').strip(); status=request.args.get('status','All')
     where=[]; args=[]
@@ -775,11 +635,6 @@ def participation_import_confirm(batch_id):
             conn.executemany('INSERT INTO event_participants(event_id,student_id,selected_by,selection_status) VALUES(?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status=excluded.selection_status,selected_by=excluded.selected_by',participants_to_add)
             marked_at_expression='CURRENT_TIMESTAMP::text' if USING_POSTGRES else 'CURRENT_TIMESTAMP'
             conn.executemany(f'INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET status=excluded.status,marked_at={marked_at_expression},marked_by=excluded.marked_by',attendance_to_add)
-            import_event_ids=list({event_id for event_id,_,_,_ in attendance_to_add})
-            event_marks=','.join('?' for _ in import_event_ids)
-            credit_semesters=[r['semester_label'] for r in conn.execute(
-                f"SELECT DISTINCT semester_label FROM events WHERE id IN ({event_marks}) AND semester_label<>''",import_event_ids).fetchall()]
-            sync_semester_credits_for_semesters(conn,credit_semesters,session['admin_id'])
         imported=len(attendance_to_add)
         conn.execute('UPDATE participation_import_batches SET status="Completed",imported_count=?,skipped_count=?,completed_at=CURRENT_TIMESTAMP WHERE id=?',
                      (imported,skipped,batch_id))
@@ -815,105 +670,13 @@ def fair_selection():
 def event_detail(eid):
     event=db().execute('SELECT * FROM events WHERE id=?',(eid,)).fetchone()
     if not event:return redirect(url_for('events'))
-    participants=db().execute('''SELECT s.*,p.selection_status,a.status attendance,a.marked_at,c.credit_points,
-        x.learning_words,x.society_words,x.personal_words,x.geotag_photo,x.report_evidence_verified,x.report_mark,x.sessions_attended,x.certificate_received,
+    participants=db().execute('''SELECT s.*,p.selection_status,a.status attendance,a.marked_at,
         (SELECT COUNT(*) FROM attendance old WHERE old.student_id=s.id AND old.status="Present") past_events
         FROM event_participants p JOIN students s ON s.id=p.student_id
         LEFT JOIN attendance a ON a.event_id=p.event_id AND a.student_id=p.student_id
-        LEFT JOIN credits c ON c.event_id=p.event_id AND c.student_id=p.student_id
-        LEFT JOIN activity_assessments x ON x.event_id=p.event_id AND x.student_id=p.student_id
         WHERE p.event_id=? ORDER BY s.name''',(eid,)).fetchall()
     available=db().execute("SELECT id,name,register_no,department,class_name,section FROM students WHERE yrc_status='Active' AND id NOT IN (SELECT student_id FROM event_participants WHERE event_id=? AND selection_status='Selected') ORDER BY name",(eid,)).fetchall()
     return render_template('event_detail.html',event=event,participants=participants,available=available)
-
-@app.post('/events/<int:eid>/assessment/<int:sid>')
-@login_required
-def activity_assessment(eid,sid):
-    conn=db()
-    event=conn.execute('SELECT semester_label,credit_activity_type,course_sessions_total FROM events WHERE id=?',(eid,)).fetchone()
-    attendance=conn.execute("SELECT status FROM attendance WHERE event_id=? AND student_id=?",(eid,sid)).fetchone()
-    if not event or not attendance or attendance['status']!='Present':
-        flash('Mark the student Present before entering an activity assessment.','error')
-        return redirect(url_for('event_detail',eid=eid))
-    f=request.form
-    try:
-        if event['credit_activity_type']=='Community':
-            learning=int(f.get('learning_words') or 0); society=int(f.get('society_words') or 0)
-            personal=int(f.get('personal_words') or 0); report_mark=float(f.get('report_mark') or 0)
-            photo=1 if f.get('geotag_photo')=='1' else 0
-            evidence_verified=1 if f.get('evidence_verified')=='1' else 0
-            if min(learning,society,personal)<0 or not math.isfinite(report_mark) or report_mark<0 or report_mark>2:
-                raise ValueError
-            evidence_complete=(learning>=100 and society>=50 and personal>=50 and photo and evidence_verified)
-            if not evidence_complete and report_mark>0:
-                flash('Report marks require coordinator verification of the 100/50/50 word minimums and a clear geo-tagged photo.','error')
-                return redirect(url_for('event_detail',eid=eid))
-            conn.execute('''INSERT INTO activity_assessments(event_id,student_id,learning_words,society_words,personal_words,geotag_photo,report_evidence_verified,report_mark,updated_by,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(event_id,student_id) DO UPDATE SET
-                learning_words=excluded.learning_words,society_words=excluded.society_words,personal_words=excluded.personal_words,
-                geotag_photo=excluded.geotag_photo,report_evidence_verified=excluded.report_evidence_verified,
-                report_mark=excluded.report_mark,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP''',
-                (eid,sid,learning,society,personal,photo,evidence_verified,report_mark,session['admin_id']))
-            audit('Community activity report assessed','activity_assessment',eid,'',
-                  f'student {sid}; evidence {"verified" if evidence_complete else "incomplete"}; report {report_mark:g}/2')
-        elif event['credit_activity_type']=='Certificate':
-            attended=int(f.get('sessions_attended') or 0); certified=1 if f.get('certificate_received')=='1' else 0
-            total=int(event['course_sessions_total'] or 0)
-            if attended<0 or attended>total or total<=0:
-                flash('Enter attended sessions between 0 and the course total.','error')
-                return redirect(url_for('event_detail',eid=eid))
-            conn.execute('''INSERT INTO activity_assessments(event_id,student_id,sessions_attended,certificate_received,updated_by,updated_at)
-                VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(event_id,student_id) DO UPDATE SET
-                sessions_attended=excluded.sessions_attended,certificate_received=excluded.certificate_received,
-                updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP''',
-                (eid,sid,attended,certified,session['admin_id']))
-            audit('Certificate course assessed','activity_assessment',eid,'',
-                  f'student {sid}; attendance {attended}/{total}; certificate {"verified" if certified else "not verified"}')
-        else:
-            flash('Assign an activity type and semester to this event first.','error')
-            return redirect(url_for('event_detail',eid=eid))
-    except (TypeError,ValueError,OverflowError):
-        flash('Assessment values must be valid nonnegative numbers within the stated limits.','error')
-        return redirect(url_for('event_detail',eid=eid))
-    sync_semester_credit(conn,sid,event['semester_label'],session['admin_id'])
-    conn.commit()
-    flash('Assessment saved and semester progress recalculated.','success')
-    return redirect(url_for('event_detail',eid=eid))
-
-@app.post('/events/<int:eid>/credit-settings')
-@login_required
-def event_credit_settings(eid):
-    conn=db(); event=conn.execute('SELECT id,semester_label,credit_activity_type,event_scope,credit_hours,course_sessions_total FROM events WHERE id=?',(eid,)).fetchone()
-    if not event:
-        flash('Event was not found.','error'); return redirect(url_for('events'))
-    credit_type=request.form.get('credit_activity_type','Not eligible')
-    event_scope=request.form.get('event_scope','Internal')
-    semester_label=request.form.get('semester_label','').strip()
-    try:
-        activity_hours=float(request.form.get('credit_hours') or 0)
-        course_sessions_total=int(request.form.get('course_sessions_total') or 0)
-    except (TypeError,ValueError): activity_hours=-1; course_sessions_total=-1
-    if (credit_type not in ('Community','Certificate','Not eligible') or event_scope not in ('Internal','External') or len(semester_label)>40 or not math.isfinite(activity_hours) or activity_hours<0 or
-        (credit_type!='Not eligible' and not semester_label) or
-        (credit_type in ('Community','Certificate') and activity_hours<=0) or
-        (credit_type=='Certificate' and course_sessions_total<=0)):
-        flash('Choose a valid event scope and semester. Creditable activities need positive hours; certificate courses also need a session count.','error')
-        return redirect(url_for('event_detail',eid=eid))
-    if credit_type=='Not eligible': semester_label=''
-    if credit_type=='Not eligible': activity_hours=0
-    if credit_type!='Certificate': course_sessions_total=0
-    affected=[r['student_id'] for r in conn.execute("SELECT student_id FROM attendance WHERE event_id=? AND status='Present'",(eid,)).fetchall()]
-    old_semester=event['semester_label']
-    conn.execute('UPDATE events SET semester_label=?,credit_activity_type=?,event_scope=?,credit_hours=?,course_sessions_total=? WHERE id=?',
-                 (semester_label,credit_type,event_scope,activity_hours,course_sessions_total,eid))
-    if affected:
-        sync_semester_credits_for_semesters(conn,[old_semester,semester_label],session['admin_id'])
-    audit('Event credit classification updated','event',eid,
-          f"{old_semester}:{event['credit_activity_type']}:{event['event_scope']}:{event['credit_hours']}:{event['course_sessions_total']}",
-          f'{semester_label}:{credit_type}:{event_scope}:{activity_hours}:{course_sessions_total}')
-    conn.commit()
-    flash('Credit rules saved. Present attendance for this event has been included in semester progress.','success')
-    return redirect(url_for('event_detail',eid=eid))
 
 @app.post('/events/<int:eid>/delete')
 @login_required
@@ -929,7 +692,7 @@ def event_delete(eid):
 @app.post('/events/<int:eid>/permanent-delete')
 @login_required
 def event_permanent_delete(eid):
-    conn=db(); event=conn.execute('SELECT id,name,status,semester_label FROM events WHERE id=?',(eid,)).fetchone()
+    conn=db(); event=conn.execute('SELECT id,name,status FROM events WHERE id=?',(eid,)).fetchone()
     if not event:
         flash('Event was not found.','error'); return redirect(url_for('events'))
     if event['status']!='Cancelled':
@@ -937,11 +700,9 @@ def event_permanent_delete(eid):
         return redirect(url_for('events'))
     audit('Cancelled event permanently deleted','event',eid,event['name'],'')
     try:
-        semester_label=event['semester_label']
         conn.execute('DELETE FROM selection_history WHERE event_id=?',(eid,))
         conn.execute('DELETE FROM events WHERE id=?',(eid,))
-        sync_semester_credits_for_semesters(conn,[semester_label],session['admin_id'])
-        conn.commit(); flash('Cancelled event and its linked participation, attendance, and credit records were permanently deleted.','success')
+        conn.commit(); flash('Cancelled event and its linked participation and attendance records were permanently deleted.','success')
     except DB_INTEGRITY_ERROR:
         conn.rollback(); flash('Event could not be deleted because linked records still reference it.','error')
     return redirect(url_for('events'))
@@ -992,80 +753,35 @@ def remove_participant(eid,sid):
 def mark_attendance(eid,sid):
     conn=db(); status=request.form['status']
     if status not in ('Present','Absent','Excused','Pending Verification','Undo'): return redirect(url_for('event_detail',eid=eid))
-    event=conn.execute('SELECT semester_label FROM events WHERE id=?',(eid,)).fetchone()
-    semester_label=event['semester_label'] if event else ''
     enrolled=conn.execute("SELECT selection_status FROM event_participants WHERE event_id=? AND student_id=?",(eid,sid)).fetchone()
     if status!='Undo' and (not enrolled or enrolled['selection_status']!='Selected'):
         flash('Only selected volunteers may receive attendance records. Flag exceptions for manual review.','error'); return redirect(url_for('event_detail',eid=eid))
     if status=='Undo':
-        credit=conn.execute("SELECT status FROM credits WHERE event_id=? AND student_id=?",(eid,sid)).fetchone()
-        if credit and credit['status']=='Awarded':
-            flash('A verified credit requires an audited amendment; attendance cannot be undone here.','error')
-            return redirect(url_for('event_detail',eid=eid))
-        conn.execute('DELETE FROM attendance WHERE event_id=? AND student_id=?',(eid,sid)); conn.execute('DELETE FROM credits WHERE event_id=? AND student_id=?',(eid,sid))
+        conn.execute('DELETE FROM attendance WHERE event_id=? AND student_id=?',(eid,sid))
     else:
         conn.execute('INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET status=excluded.status,marked_at=CURRENT_TIMESTAMP,marked_by=excluded.marked_by',(eid,sid,status,session['admin_id']))
-        if status in ('Absent','Excused'):
-            conn.execute("UPDATE credits SET status='Not eligible',credit_points=0,updated_by=? WHERE event_id=? AND student_id=? AND status<>'Awarded'",(session['admin_id'],eid,sid))
-    if semester_label:
-        sync_semester_credit(conn,sid,semester_label,session['admin_id'])
     audit('Attendance '+status,'attendance',eid,'',sid); conn.commit(); return redirect(url_for('event_detail',eid=eid))
 
 @app.get('/reports')
 @login_required
 def reports():
-    conn=db(); rows=conn.execute('SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT COALESCE(SUM(c.credit_points),0) FROM credits c WHERE c.student_id=s.id AND c.status="Awarded")+(SELECT COALESCE(SUM(sc.credit_points),0) FROM semester_credit_awards sc WHERE sc.student_id=s.id AND sc.status="Awarded") credits,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event FROM students s WHERE s.yrc_status="Active" ORDER BY events,credits,s.name').fetchall()
+    conn=db(); rows=conn.execute('SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event FROM students s WHERE s.yrc_status="Active" ORDER BY events,s.name').fetchall()
     evrows=conn.execute('SELECT e.name,e.event_date,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e ORDER BY e.event_date DESC').fetchall()
     return render_template('reports.html',rows=rows,events=evrows,
                            high_priority=[r for r in rows if r['events']==0],
                            considered=[r for r in rows if 0<r['events']<3],
                            balanced=[r for r in rows if r['events']>=3])
 
-@app.get('/credits')
-@login_required
-def credits_page():
-    conn=db()
-    rows=conn.execute('SELECT c.event_id,c.student_id,c.awarded_at,c.credit_points,c.status,e.name event_name,e.event_date,s.register_no,s.name student_name,s.department,s.class_name,s.section FROM credits c JOIN events e ON e.id=c.event_id JOIN students s ON s.id=c.student_id ORDER BY c.awarded_at DESC').fetchall()
-    points=conn.execute("SELECT COALESCE((SELECT SUM(credit_points) FROM credits WHERE status='Awarded'),0)+COALESCE((SELECT SUM(credit_points) FROM semester_credit_awards WHERE status='Awarded'),0)").fetchone()[0]
-    recognized=conn.execute("SELECT COUNT(*) FROM (SELECT student_id FROM credits WHERE status='Awarded' UNION SELECT student_id FROM semester_credit_awards WHERE status='Awarded') recognized_students").fetchone()[0]
-    awards=conn.execute('''SELECT sc.student_id,sc.semester_label,sc.credit_points,sc.outside_activity_count,
-        sc.inside_activity_hours,sc.community_marks,sc.certificate_marks,sc.qualification,sc.status,sc.awarded_at,s.register_no,s.name student_name
-        FROM semester_credit_awards sc JOIN students s ON s.id=sc.student_id
-        ORDER BY sc.semester_label DESC,s.name''').fetchall()
-    progress=[dict(row) for row in awards]
-    for item in progress:
-        item['award_status']=item['status']
-        item['earned']=item['status']=='Awarded'
-    totals={'points':points,'records':len(rows)+len(awards),'students':recognized}
-    return render_template('credits.html',rows=rows,totals=totals,awards=awards,progress=progress)
-
-@app.post('/credits/<int:eid>/<int:sid>/verify')
-@login_required
-def verify_credit(eid,sid):
-    conn=db()
-    role=conn.execute('SELECT role FROM admin_roles WHERE admin_id=?',(session['admin_id'],)).fetchone()
-    if not role or role['role']!='super_admin':
-        flash('Only a university coordinator can verify official credit awards.','error')
-        return redirect(url_for('credits_page'))
-    row=conn.execute("SELECT status,credit_points FROM credits WHERE event_id=? AND student_id=?",(eid,sid)).fetchone()
-    try: amount=float(request.form.get('credit_points',''))
-    except ValueError: amount=-1
-    if not row or row['status'] not in ('Pending','Disputed') or amount < 0:
-        flash('This record cannot be verified. Check its status and enter a valid nonnegative credit amount.','error')
-        return redirect(url_for('credits_page'))
-    conn.execute("UPDATE credits SET credit_points=?,status='Awarded',awarded_at=CURRENT_TIMESTAMP,updated_by=? WHERE event_id=? AND student_id=?",(amount,session['admin_id'],eid,sid))
-    audit('Credit verified','credit',eid,f"{row['status']}:{row['credit_points']}",f'Awarded:{amount}; student {sid}')
-    conn.commit(); flash('Credit decision verified and recorded.','success')
-    return redirect(url_for('credits_page'))
-
 @app.get('/reports/students.csv')
 @login_required
 def students_csv():
-    import csv, io
-    rows=db().execute('SELECT s.register_no,s.name,s.department,s.class_name,s.section,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT COALESCE(SUM(c.credit_points),0) FROM credits c WHERE c.student_id=s.id AND c.status="Awarded")+(SELECT COALESCE(SUM(sc.credit_points),0) FROM semester_credit_awards sc WHERE sc.student_id=s.id AND sc.status="Awarded") credits FROM students s ORDER BY s.name').fetchall()
-    buf=io.StringIO(); writer=csv.writer(buf); writer.writerow(['Register No','Name','Department','Class','Section','Events','Credits']); writer.writerows([tuple(r) for r in rows])
-    from flask import Response
-    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-student-credits.csv'})
+    rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.year,s.email,s.phone,s.yrc_status,
+        (SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status='Present') events
+        FROM students s ORDER BY s.name''').fetchall()
+    buf=io.StringIO(); writer=csv.writer(buf)
+    writer.writerow(['Register No','Name','Department','Class','Section','Year','Email','Phone','YRC Status','Events Attended'])
+    writer.writerows([tuple(r) for r in rows])
+    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-students.csv'})
 
 @app.get('/reports/priority-students.csv')
 @login_required

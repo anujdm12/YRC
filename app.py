@@ -223,6 +223,8 @@ def import_students():
         flash('CSV needs register_no, name, department, and year columns. No students were imported.','error'); return redirect(url_for('students'))
     records=[]; errors=[]; known={r[0].strip().casefold() for r in db().execute('SELECT register_no FROM students')}
     for row_num,row in enumerate(reader,start=2):
+        if not any(str(value or '').strip() for value in row.values()):
+            continue
         reg=(row.get('register_no') or '').strip().upper(); name=(row.get('name') or '').strip(); department=(row.get('department') or '').strip(); class_name=(row.get('class_name') or row.get('class') or '').strip(); section=(row.get('section') or '').strip().upper()
         if '—' in department and not class_name:
             department, class_name = (part.strip() for part in department.split('—',1))

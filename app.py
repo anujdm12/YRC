@@ -30,7 +30,7 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS admin_roles(admin_id INTEGER PRIMARY KEY REFERENCES admins(id) ON DELETE CASCADE, role TEXT NOT NULL DEFAULT 'super_admin', department TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS students(id INTEGER PRIMARY KEY, register_no TEXT UNIQUE NOT NULL, name TEXT NOT NULL, department TEXT NOT NULL, class_name TEXT NOT NULL DEFAULT '', section TEXT NOT NULL DEFAULT '', year INTEGER NOT NULL, email TEXT, phone TEXT, yrc_status TEXT NOT NULL DEFAULT 'Active', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, event_date TEXT NOT NULL, start_time TEXT, end_time TEXT, venue TEXT, max_participants INTEGER, credit_points REAL NOT NULL DEFAULT 0, deadline TEXT, status TEXT NOT NULL DEFAULT 'Upcoming', semester_label TEXT NOT NULL DEFAULT '', credit_activity_type TEXT NOT NULL DEFAULT 'Not eligible', credit_hours REAL NOT NULL DEFAULT 0, course_sessions_total INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, event_date TEXT NOT NULL, start_time TEXT, end_time TEXT, venue TEXT, max_participants INTEGER, credit_points REAL NOT NULL DEFAULT 0, deadline TEXT, status TEXT NOT NULL DEFAULT 'Upcoming', semester_label TEXT NOT NULL DEFAULT '', credit_activity_type TEXT NOT NULL DEFAULT 'Not eligible', event_scope TEXT NOT NULL DEFAULT 'Internal', credit_hours REAL NOT NULL DEFAULT 0, course_sessions_total INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS event_participants(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE, student_id INTEGER NOT NULL REFERENCES students(id), selection_status TEXT NOT NULL DEFAULT 'Selected', selected_at TEXT DEFAULT CURRENT_TIMESTAMP, selected_by INTEGER, UNIQUE(event_id,student_id));
 CREATE TABLE IF NOT EXISTS selection_history(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, decision TEXT NOT NULL, attended_count INTEGER NOT NULL DEFAULT 0, seat_offers INTEGER NOT NULL DEFAULT 0, priority_score INTEGER NOT NULL DEFAULT 0, tie_break TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', decided_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS attendance(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, status TEXT NOT NULL, marked_at TEXT DEFAULT CURRENT_TIMESTAMP, marked_by INTEGER, UNIQUE(event_id,student_id), FOREIGN KEY(event_id,student_id) REFERENCES event_participants(event_id,student_id) ON DELETE CASCADE);
@@ -66,6 +66,8 @@ def init_db():
         conn.execute("ALTER TABLE events ADD COLUMN semester_label TEXT NOT NULL DEFAULT ''")
     if 'credit_activity_type' not in event_columns:
         conn.execute("ALTER TABLE events ADD COLUMN credit_activity_type TEXT NOT NULL DEFAULT 'Not eligible'")
+    if 'event_scope' not in event_columns:
+        conn.execute("ALTER TABLE events ADD COLUMN event_scope TEXT NOT NULL DEFAULT 'Internal'")
     if 'credit_hours' not in event_columns:
         conn.execute('ALTER TABLE events ADD COLUMN credit_hours REAL NOT NULL DEFAULT 0')
     if 'course_sessions_total' not in event_columns:
@@ -158,7 +160,9 @@ def audit(action, entity, entity_id, old='', new=''):
     db().execute('INSERT INTO admin_audit_logs(admin_id,action,entity_type,entity_id,old_value,new_value) VALUES(?,?,?,?,?,?)', (session.get('admin_id'), action, entity, entity_id, str(old), str(new)))
 
 def calculate_semester_result(activity_rows, prior_status):
-    inside_hours=sum(float(r['credit_hours'] or 0) for r in activity_rows if r['credit_activity_type']=='Community')
+    # The PPTX applies the same 30-hour semester threshold across activity types.
+    # Internal/external describes the event location, not a different credit rule.
+    eligible_hours=sum(float(r['credit_hours'] or 0) for r in activity_rows if r['credit_activity_type'] in ('Community','Certificate'))
     community_scores=[]; certificate_scores=[]
     for row in activity_rows:
         if row['credit_activity_type']=='Community':
@@ -172,12 +176,12 @@ def calculate_semester_result(activity_rows, prior_status):
     community_marks=sum(sorted(community_scores,reverse=True)[:5])
     certificate_marks=max(certificate_scores,default=0)
     community_count=sum(1 for r in activity_rows if r['credit_activity_type']=='Community')
-    qualifies=inside_hours>=30
+    qualifies=eligible_hours>=30
     status='Awarded' if qualifies else ('Review' if prior_status in ('Awarded','Review') else 'In progress')
-    basis='30 community engagement hours = 1 academic credit' if qualifies else '30 community engagement hours required for 1 academic credit'
+    basis='30 attended eligible activity hours = 1 academic credit' if qualifies else '30 attended eligible activity hours required for 1 academic credit'
     if certificate_marks:
         basis+=f'; certificate-course assessment {certificate_marks:g}/25'
-    return (1 if qualifies else 0,community_count,inside_hours,basis,status,community_marks,certificate_marks,qualifies)
+    return (1 if qualifies else 0,community_count,eligible_hours,basis,status,community_marks,certificate_marks,qualifies)
 
 def sync_semester_credit(conn, student_id, semester_label, admin_id=None):
     """Recalculate one credit and its separate semester mark tracks."""
@@ -209,10 +213,10 @@ def sync_semester_credit(conn, student_id, semester_label, admin_id=None):
          community_marks,certificate_marks,datetime.now().isoformat(timespec='seconds') if qualifies else None,admin_id))
     if qualifies and prior_status!='Awarded':
         audit('Semester academic credit awarded automatically','semester_credit',student_id,'',
-              f'{semester_label}: 1 credit; {inside_hours:g} community hours; {community_marks:g}/25 community marks')
+              f'{semester_label}: 1 credit; {inside_hours:g} attended eligible activity hours; {community_marks:g}/25 community marks')
     elif not qualifies and prior_status=='Awarded':
         audit('Semester academic credit flagged for review','semester_credit',student_id,
-              f'{semester_label}: Awarded',f'{inside_hours:g}/30 community hours; {community_marks:g}/25 marks')
+              f'{semester_label}: Awarded',f'{inside_hours:g}/30 attended activity hours; {community_marks:g}/25 marks')
 
 def sync_semester_credits_for_semesters(conn, semester_labels, admin_id=None):
     """Refresh semester credit and assessment progress for affected terms."""
@@ -243,10 +247,10 @@ def sync_semester_credits_for_semesters(conn, semester_labels, admin_id=None):
         prior=existing_by_key.get((student_id,semester_label))
         if qualifies and prior!='Awarded':
             audit('Semester academic credit awarded automatically','semester_credit',student_id,'',
-                  f'{semester_label}: 1 credit; {inside_hours:g} community hours; {community_marks:g}/25 community marks')
+                  f'{semester_label}: 1 credit; {inside_hours:g} attended eligible activity hours; {community_marks:g}/25 community marks')
         elif not qualifies and prior=='Awarded':
             audit('Semester academic credit flagged for review','semester_credit',student_id,
-                  f'{semester_label}: Awarded',f'{inside_hours:g}/30 community hours; {community_marks:g}/25 marks')
+                  f'{semester_label}: Awarded',f'{inside_hours:g}/30 attended activity hours; {community_marks:g}/25 marks')
     if updates:
         conn.executemany('''INSERT INTO semester_credit_awards(student_id,semester_label,credit_points,outside_activity_count,
             inside_activity_hours,qualification,status,community_marks,certificate_marks,awarded_at,updated_by)
@@ -420,6 +424,7 @@ def events():
         f=request.form
         name=f.get('name','').strip()
         credit_type=f.get('credit_activity_type','Not eligible')
+        event_scope=f.get('event_scope','Internal')
         semester_label=f.get('semester_label','').strip()
         try:
             date.fromisoformat(f.get('event_date',''))
@@ -430,17 +435,17 @@ def events():
             flash('Enter a valid date, seat capacity, and activity hours.','error'); return redirect(url_for('events'))
         status=f.get('status','Upcoming')
         if (not name or (capacity is not None and capacity<1) or not math.isfinite(activity_hours) or activity_hours<0 or
-            credit_type not in ('Community','Certificate','Not eligible') or len(semester_label)>40 or
+            credit_type not in ('Community','Certificate','Not eligible') or event_scope not in ('Internal','External') or len(semester_label)>40 or
             (credit_type!='Not eligible' and not semester_label) or
-            (credit_type=='Community' and activity_hours<=0) or
+            (credit_type in ('Community','Certificate') and activity_hours<=0) or
             (credit_type=='Certificate' and course_sessions_total<=0) or
             status not in ('Draft','Upcoming','Open','Closed','Completed','Cancelled')):
-            flash('Check the event details. Creditable activities need a semester; community activities need positive hours; certificate courses need a session count.','error'); return redirect(url_for('events'))
+            flash('Check the event details. Creditable activities need a semester and hours; certificate courses also need a session count.','error'); return redirect(url_for('events'))
         if credit_type=='Not eligible': semester_label=''
-        if credit_type!='Community': activity_hours=0
+        if credit_type=='Not eligible': activity_hours=0
         if credit_type!='Certificate': course_sessions_total=0
-        cur=conn.execute('''INSERT INTO events(name,description,event_date,start_time,end_time,venue,max_participants,credit_points,deadline,status,semester_label,credit_activity_type,credit_hours,course_sessions_total)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(name,f.get('description'),f['event_date'],f.get('start_time'),f.get('end_time'),f.get('venue'),capacity,0,f.get('deadline'),status,semester_label,credit_type,activity_hours,course_sessions_total))
+        cur=conn.execute('''INSERT INTO events(name,description,event_date,start_time,end_time,venue,max_participants,credit_points,deadline,status,semester_label,credit_activity_type,event_scope,credit_hours,course_sessions_total)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(name,f.get('description'),f['event_date'],f.get('start_time'),f.get('end_time'),f.get('venue'),capacity,0,f.get('deadline'),status,semester_label,credit_type,event_scope,activity_hours,course_sessions_total))
         audit('Event created','event',cur.lastrowid,'',f['name']); conn.commit(); flash('Event created.','success'); return redirect(url_for('events'))
     q=request.args.get('q','').strip(); status=request.args.get('status','All')
     where=[]; args=[]
@@ -878,33 +883,34 @@ def activity_assessment(eid,sid):
 @app.post('/events/<int:eid>/credit-settings')
 @login_required
 def event_credit_settings(eid):
-    conn=db(); event=conn.execute('SELECT id,semester_label,credit_activity_type,credit_hours,course_sessions_total FROM events WHERE id=?',(eid,)).fetchone()
+    conn=db(); event=conn.execute('SELECT id,semester_label,credit_activity_type,event_scope,credit_hours,course_sessions_total FROM events WHERE id=?',(eid,)).fetchone()
     if not event:
         flash('Event was not found.','error'); return redirect(url_for('events'))
     credit_type=request.form.get('credit_activity_type','Not eligible')
+    event_scope=request.form.get('event_scope','Internal')
     semester_label=request.form.get('semester_label','').strip()
     try:
         activity_hours=float(request.form.get('credit_hours') or 0)
         course_sessions_total=int(request.form.get('course_sessions_total') or 0)
     except (TypeError,ValueError): activity_hours=-1; course_sessions_total=-1
-    if (credit_type not in ('Community','Certificate','Not eligible') or len(semester_label)>40 or not math.isfinite(activity_hours) or activity_hours<0 or
+    if (credit_type not in ('Community','Certificate','Not eligible') or event_scope not in ('Internal','External') or len(semester_label)>40 or not math.isfinite(activity_hours) or activity_hours<0 or
         (credit_type!='Not eligible' and not semester_label) or
-        (credit_type=='Community' and activity_hours<=0) or
+        (credit_type in ('Community','Certificate') and activity_hours<=0) or
         (credit_type=='Certificate' and course_sessions_total<=0)):
-        flash('Choose a valid activity type and semester. Community activities need positive hours; certificate courses need a positive session count.','error')
+        flash('Choose a valid event scope and semester. Creditable activities need positive hours; certificate courses also need a session count.','error')
         return redirect(url_for('event_detail',eid=eid))
     if credit_type=='Not eligible': semester_label=''
-    if credit_type!='Community': activity_hours=0
+    if credit_type=='Not eligible': activity_hours=0
     if credit_type!='Certificate': course_sessions_total=0
     affected=[r['student_id'] for r in conn.execute("SELECT student_id FROM attendance WHERE event_id=? AND status='Present'",(eid,)).fetchall()]
     old_semester=event['semester_label']
-    conn.execute('UPDATE events SET semester_label=?,credit_activity_type=?,credit_hours=?,course_sessions_total=? WHERE id=?',
-                 (semester_label,credit_type,activity_hours,course_sessions_total,eid))
+    conn.execute('UPDATE events SET semester_label=?,credit_activity_type=?,event_scope=?,credit_hours=?,course_sessions_total=? WHERE id=?',
+                 (semester_label,credit_type,event_scope,activity_hours,course_sessions_total,eid))
     if affected:
         sync_semester_credits_for_semesters(conn,[old_semester,semester_label],session['admin_id'])
     audit('Event credit classification updated','event',eid,
-          f"{old_semester}:{event['credit_activity_type']}:{event['credit_hours']}:{event['course_sessions_total']}",
-          f'{semester_label}:{credit_type}:{activity_hours}:{course_sessions_total}')
+          f"{old_semester}:{event['credit_activity_type']}:{event['event_scope']}:{event['credit_hours']}:{event['course_sessions_total']}",
+          f'{semester_label}:{credit_type}:{event_scope}:{activity_hours}:{course_sessions_total}')
     conn.commit()
     flash('Credit rules saved. Present attendance for this event has been included in semester progress.','success')
     return redirect(url_for('event_detail',eid=eid))

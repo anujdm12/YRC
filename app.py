@@ -544,6 +544,17 @@ def participation_import():
         conn.rollback(); flash('The sheet could not be staged for review. No records were imported.','error'); return redirect(url_for('participation_import'))
     return redirect(url_for('participation_import_review',batch_id=batch_id))
 
+@app.post('/attendance/import/history/clear')
+@login_required
+def participation_import_history_clear():
+    conn=db()
+    batches=conn.execute('SELECT COUNT(*) FROM participation_import_batches').fetchone()[0]
+    conn.execute('DELETE FROM participation_import_rows')
+    conn.execute('DELETE FROM participation_import_batches')
+    conn.commit()
+    flash(f'Cleared {batches} import history record(s). Saved participants and attendance were not changed.','success')
+    return redirect(url_for('participation_import'))
+
 @app.get('/attendance/import/<batch_id>')
 @login_required
 def participation_import_review(batch_id):
@@ -775,10 +786,27 @@ def import_event_participants(eid):
     register_col=next((header for key,header in normalized.items()
                        if (('register' in key or 'registration' in key) and ('number' in key or 'no' in key)) or
                        key in ('usn','usn no','usn number')),None)
+    event_col=next((header for key,header in normalized.items()
+                    if key in ('event','event name','name of event','activity name') or
+                    ('event' in key.split() and 'name' in key.split())),None)
+    if not event_col:
+        found=', '.join(headers[:8]) or 'no headers found'
+        flash(f'This event import needs an Event Name column so every row can be checked against "{event["name"]}". Headers found: {found}. No participants were added.','error')
+        return redirect(url_for('event_detail',eid=eid))
     if not name_col and not register_col:
         found=', '.join(headers[:8]) or 'no headers found'
         flash(f'Could not identify a Name or Register Number column. Headers found: {found}. No participants were added.','error')
         return redirect(url_for('event_detail',eid=eid))
+
+    rows=list(reader)
+    expected_event=' '.join(str(event['name']).split()).casefold()
+    for row_number,row in enumerate(rows,start=2):
+        if not any(str(value or '').strip() for value in row.values()): continue
+        sheet_event=' '.join(str(row.get(event_col) or '').split()).casefold()
+        if sheet_event!=expected_event:
+            supplied='(blank)' if not sheet_event else str(row.get(event_col)).strip()
+            flash(f'No participants were added. Row {row_number} names event "{supplied}", but this page is for "{event["name"]}". Every row must use the same event name (case and extra spaces are ignored).','error')
+            return redirect(url_for('event_detail',eid=eid))
 
     roster=conn.execute("SELECT id,register_no,name FROM students WHERE yrc_status='Active'").fetchall()
     by_reg={}; by_name={}
@@ -791,7 +819,7 @@ def import_event_participants(eid):
     capacity=event['max_participants'] if event['max_participants'] is not None else 1000000000
     seats=max(0,capacity-selected_count)
     queued=set(); added=already=unmatched=over_capacity=name_matches=duplicates=0
-    for row in reader:
+    for row in rows:
         if not any(str(value or '').strip() for value in row.values()): continue
         register_no=' '.join(str(row.get(register_col) or '').split()) if register_col else ''
         student_name=' '.join(str(row.get(name_col) or '').split()) if name_col else ''

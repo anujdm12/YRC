@@ -743,6 +743,90 @@ def select_student(eid):
         if recent >= 4: flash(f'Participation note: {student["name"]} attended {recent} of the last 5 events.', 'error')
     return redirect(url_for('event_detail',eid=eid))
 
+@app.post('/events/<int:eid>/participants/import')
+@login_required
+def import_event_participants(eid):
+    conn=db()
+    event=conn.execute('SELECT id,name,max_participants,status FROM events WHERE id=?',(eid,)).fetchone()
+    if not event:
+        flash('Event not found.','error'); return redirect(url_for('events'))
+    if event['status']=='Cancelled':
+        flash('Participants cannot be imported into a cancelled event.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    upload=request.files.get('file')
+    if not upload or not upload.filename or not upload.filename.lower().endswith('.csv'):
+        flash('Choose a CSV export of the participant sheet. No participants were added.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    raw=upload.read()
+    try: text=raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        try: text=raw.decode('cp1252')
+        except UnicodeDecodeError:
+            flash('The CSV encoding could not be read. Save the sheet as CSV and try again.','error')
+            return redirect(url_for('event_detail',eid=eid))
+    try: dialect=csv.Sniffer().sniff(text[:8192],delimiters=',;\t')
+    except csv.Error: dialect=csv.excel
+    reader=csv.DictReader(io.StringIO(text),dialect=dialect)
+    headers=reader.fieldnames or []
+    normalized={normalize_import_key(header):header for header in headers}
+    name_col=next((header for key,header in normalized.items()
+                   if key=='name' or ('name' in key.split() and
+                   bool(set(key.split()) & {'full','student','participant','your'}))),None)
+    register_col=next((header for key,header in normalized.items()
+                       if (('register' in key or 'registration' in key) and ('number' in key or 'no' in key)) or
+                       key in ('usn','usn no','usn number')),None)
+    if not name_col and not register_col:
+        found=', '.join(headers[:8]) or 'no headers found'
+        flash(f'Could not identify a Name or Register Number column. Headers found: {found}. No participants were added.','error')
+        return redirect(url_for('event_detail',eid=eid))
+
+    roster=conn.execute("SELECT id,register_no,name FROM students WHERE yrc_status='Active'").fetchall()
+    by_reg={}; by_name={}
+    for student in roster:
+        by_reg.setdefault(normalize_register_no(student['register_no']),[]).append(student['id'])
+        by_name.setdefault(normalize_student_name(student['name']),[]).append(student['id'])
+    selected={row['student_id'] for row in conn.execute(
+        "SELECT student_id FROM event_participants WHERE event_id=? AND selection_status='Selected'",(eid,)).fetchall()}
+    selected_count=len(selected)
+    capacity=event['max_participants'] if event['max_participants'] is not None else 1000000000
+    seats=max(0,capacity-selected_count)
+    queued=set(); added=already=unmatched=over_capacity=name_matches=duplicates=0
+    for row in reader:
+        if not any(str(value or '').strip() for value in row.values()): continue
+        register_no=' '.join(str(row.get(register_col) or '').split()) if register_col else ''
+        student_name=' '.join(str(row.get(name_col) or '').split()) if name_col else ''
+        if not register_no and not student_name:
+            unmatched+=1; continue
+        student_id,match_method,_error=resolve_import_student(register_no,student_name,by_reg,by_name)
+        if not student_id:
+            unmatched+=1; continue
+        if student_id in selected:
+            already+=1; continue
+        if student_id in queued:
+            duplicates+=1; continue
+        if added>=seats:
+            over_capacity+=1; continue
+        queued.add(student_id)
+        if match_method=='name': name_matches+=1
+        added+=1
+    if not added:
+        flash(f'No new participants added. Already selected: {already}; unmatched or ambiguous: {unmatched}; duplicate sheet rows: {duplicates}; over capacity: {over_capacity}.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    try:
+        conn.executemany('''INSERT INTO event_participants(event_id,student_id,selected_by,selection_status)
+            VALUES(?,?,?,'Selected') ON CONFLICT(event_id,student_id) DO UPDATE SET
+            selection_status='Selected',selected_at=CURRENT_TIMESTAMP,selected_by=excluded.selected_by''',
+            [(eid,student_id,session['admin_id']) for student_id in queued])
+        audit('Participants imported from CSV','event',eid,event['name'],
+              f'{added} added; {already} already selected; {unmatched} unmatched; {duplicates} duplicate rows')
+        conn.commit()
+    except DB_ERROR:
+        conn.rollback()
+        flash('The participant import failed. No participants were added.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    flash(f'Added {added} participants to {event["name"]}. Matched by name: {name_matches}; already selected: {already}; unmatched or ambiguous: {unmatched}; duplicate sheet rows: {duplicates}; over capacity: {over_capacity}. Attendance was not changed.','success')
+    return redirect(url_for('event_detail',eid=eid))
+
 @app.post('/events/<int:eid>/participants/<int:sid>/remove')
 @login_required
 def remove_participant(eid,sid):

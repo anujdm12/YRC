@@ -97,6 +97,11 @@ html.yrc-first-load .page-loader.exiting{opacity:0;visibility:hidden;pointer-eve
 .welcome-row:after,.welcome-row:before,.fair-selection-heading:after,.fair-selection-heading:before{animation-duration:12s}
 .welcome-row h1,.fair-selection-heading h1{animation:soft-rise .65s .04s both}.stat-card{animation:soft-rise .56s both}.stat-card:nth-child(2){animation-delay:.06s}.stat-card:nth-child(3){animation-delay:.12s}.stat-card:nth-child(4){animation-delay:.18s}
 .chart-panel canvas{animation:chart-arrive .8s .12s both}
+.event-hero{background-image:radial-gradient(ellipse at 34% 44%,rgba(255,206,216,.1),transparent 37%),linear-gradient(125deg,#5c0017 0%,#90001f 62%,#a10c31 100%);background-size:150% 150%,100% 100%;animation:yrc-ambient-drift 18s ease-in-out infinite}
+.event-hero .hero-stamp{animation:yrc-float 8s ease-in-out infinite;will-change:translate}
+.login-brand .brand-logo{animation:yrc-float 7.5s ease-in-out infinite;will-change:translate}
+.profile-avatar{animation:yrc-float 9s 1s ease-in-out infinite;will-change:translate}
+.hero-spark{animation:yrc-sparkle 4.5s ease-in-out infinite}
 @keyframes cinema-particles{to{background-position:83px -83px,-91px 154px}}
 @keyframes cinema-card-in{from{opacity:0;transform:translateY(16px) scale(.985);filter:blur(5px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
 @keyframes cinema-logo-reveal{from{opacity:0;transform:scale(.78) rotate(-12deg);filter:blur(8px)}to{opacity:1;transform:scale(1) rotate(0);filter:blur(0)}}
@@ -105,5 +110,8 @@ html.yrc-first-load .page-loader.exiting{opacity:0;visibility:hidden;pointer-eve
 @keyframes navigation-progress{to{background-position:100vw 0}}
 @keyframes soft-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 @keyframes chart-arrive{from{opacity:.65;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@keyframes yrc-float{0%,100%{translate:0 0}50%{translate:0 -7px}}
+@keyframes yrc-ambient-drift{0%,100%{background-position:38% 50%,0 0}50%{background-position:62% 50%,0 0}}
+@keyframes yrc-sparkle{0%,100%{opacity:.72}50%{opacity:1}}
 @media(max-width:700px){.page-loader{padding:16px}.loader-card{width:min(370px,100%);min-height:300px;padding:29px 22px}.loader-logo-wrap{width:94px;height:94px}.loader-logo-wrap img{width:76px;height:76px}.login-art{background:radial-gradient(ellipse at 75% 64%,rgba(173,15,53,.2),transparent 28rem),linear-gradient(150deg,#570014,#8d001f 57%,#700018)}}
-@media(prefers-reduced-motion:reduce){.page-loader:before,.loader-logo-wrap:before,.loader-logo-wrap:after,.loader-logo-wrap img,.loader-progress:after,.welcome-row:before,.welcome-row:after,.fair-selection-heading:before,.fair-selection-heading:after{animation:none!important}.loader-card,.welcome-row h1,.fair-selection-heading h1,.stat-card,.chart-panel canvas{animation:none!important}.page-loader{transition:opacity .12s ease,visibility .12s ease}}
+@media(prefers-reduced-motion:reduce){.page-loader:before,.loader-logo-wrap:before,.loader-logo-wrap:after,.loader-logo-wrap img,.loader-progress:after,.welcome-row:before,.welcome-row:after,.fair-selection-heading:before,.fair-selection-heading:after{animation:none!important}.loader-card,.welcome-row h1,.fair-selection-heading h1,.stat-card,.chart-panel canvas,.event-hero,.event-hero .hero-stamp,.login-brand .brand-logo,.profile-avatar,.hero-spark{animation:none!important;will-change:auto}.page-loader{transition:opacity .12s ease,visibility .12s ease}}

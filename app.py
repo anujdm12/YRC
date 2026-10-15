@@ -754,6 +754,43 @@ def select_student(eid):
         if recent >= 4: flash(f'Participation note: {student["name"]} attended {recent} of the last 5 events.', 'error')
     return redirect(url_for('event_detail',eid=eid))
 
+@app.post('/events/<int:eid>/participants/select-multiple')
+@login_required
+def select_multiple_students(eid):
+    conn=db()
+    event=conn.execute('SELECT id,max_participants,status FROM events WHERE id=?',(eid,)).fetchone()
+    if not event:
+        flash('Event not found.','error'); return redirect(url_for('events'))
+    if event['status']=='Cancelled':
+        flash('Participants cannot be added to a cancelled event.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    try:
+        requested=list(dict.fromkeys(int(value) for value in request.form.getlist('student_ids')))
+    except (TypeError,ValueError):
+        flash('Choose valid students. No participants were added.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    if not requested:
+        flash('Select at least one student.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    placeholders=','.join('?' for _ in requested)
+    eligible=conn.execute(f"SELECT id FROM students WHERE yrc_status='Active' AND id IN ({placeholders})",requested).fetchall()
+    if len(eligible)!=len(requested):
+        flash('One or more selected students are no longer active. Reload the page and review the list; no one was added.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    already=conn.execute("SELECT COUNT(*) FROM event_participants WHERE event_id=? AND selection_status='Selected'",(eid,)).fetchone()[0]
+    remaining=(event['max_participants']-already) if event['max_participants'] is not None else None
+    if remaining is not None and len(requested)>remaining:
+        flash(f'Only {max(remaining,0)} seat(s) remain. No students were added; select fewer candidates.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    conn.executemany('''INSERT INTO event_participants(event_id,student_id,selected_by,selection_status)
+        VALUES(?,?,?,'Selected') ON CONFLICT(event_id,student_id) DO UPDATE SET
+        selection_status='Selected',selected_at=CURRENT_TIMESTAMP,selected_by=excluded.selected_by''',
+        [(eid,row['id'],session['admin_id']) for row in eligible])
+    audit('Manual multi-select participants','event',eid,'',len(eligible))
+    conn.commit()
+    flash(f'Added {len(eligible)} participant(s). Attendance was not changed.','success')
+    return redirect(url_for('event_detail',eid=eid))
+
 @app.post('/events/<int:eid>/participants/import')
 @login_required
 def import_event_participants(eid):

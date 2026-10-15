@@ -911,6 +911,29 @@ def mark_attendance(eid,sid):
         conn.execute('INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET status=excluded.status,marked_at=CURRENT_TIMESTAMP,marked_by=excluded.marked_by',(eid,sid,status,session['admin_id']))
     audit('Attendance '+status,'attendance',eid,'',sid); conn.commit(); return redirect(url_for('event_detail',eid=eid))
 
+@app.post('/events/<int:eid>/attendance/mark-all-present')
+@login_required
+def mark_all_present(eid):
+    conn=db()
+    event=conn.execute('SELECT id,name,status FROM events WHERE id=?',(eid,)).fetchone()
+    if not event:
+        flash('Event not found.','error')
+        return redirect(url_for('events'))
+    if event['status']=='Cancelled':
+        flash('Attendance cannot be marked for a cancelled event.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    students=conn.execute("SELECT student_id FROM event_participants WHERE event_id=? AND selection_status='Selected'",(eid,)).fetchall()
+    if not students:
+        flash('There are no selected participants to mark present.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    conn.executemany('''INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,'Present',?)
+        ON CONFLICT(event_id,student_id) DO UPDATE SET status='Present',marked_at=CURRENT_TIMESTAMP,marked_by=excluded.marked_by''',
+        [(eid,row['student_id'],session['admin_id']) for row in students])
+    audit('Attendance marked Present for all selected participants','attendance',eid,'',len(students))
+    conn.commit()
+    flash(f'Marked {len(students)} selected participant(s) present for {event["name"]}.','success')
+    return redirect(url_for('event_detail',eid=eid))
+
 @app.get('/reports')
 @login_required
 def reports():

@@ -938,11 +938,31 @@ def mark_all_present(eid):
 @login_required
 def reports():
     conn=db(); rows=conn.execute('SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event FROM students s WHERE s.yrc_status="Active" ORDER BY events,s.name').fetchall()
+    attended_rows=conn.execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,
+        COUNT(DISTINCT a.event_id) events, GROUP_CONCAT(e.name || ' (' || e.event_date || ')', ', ') event_names
+        FROM students s JOIN attendance a ON a.student_id=s.id AND a.status='Present'
+        JOIN events e ON e.id=a.event_id
+        WHERE s.yrc_status='Active'
+        GROUP BY s.id ORDER BY s.name''').fetchall()
     evrows=conn.execute('SELECT e.name,e.event_date,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e ORDER BY e.event_date DESC').fetchall()
     return render_template('reports.html',rows=rows,events=evrows,
                            high_priority=[r for r in rows if r['events']==0],
-                           considered=[r for r in rows if 0<r['events']<3],
-                           balanced=[r for r in rows if r['events']>=3])
+                           attended=attended_rows)
+
+@app.get('/reports/attended-students.csv')
+@login_required
+def attended_students_csv():
+    rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,
+        e.name event_name,e.event_date
+        FROM students s JOIN attendance a ON a.student_id=s.id AND a.status='Present'
+        JOIN events e ON e.id=a.event_id
+        WHERE s.yrc_status='Active'
+        ORDER BY s.name,e.event_date,e.name''').fetchall()
+    buf=io.StringIO(newline=''); writer=csv.writer(buf)
+    writer.writerow(['Register No','Student Name','Department','Class','Section','Event Attended','Event Date'])
+    for row in rows:
+        writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in row])
+    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-student-event-attendance.csv'})
 
 @app.get('/reports/students.csv')
 @login_required

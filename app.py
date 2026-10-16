@@ -955,10 +955,11 @@ def reports():
         student['event_names'].append(f"{attendance_row['event_name']} ({attendance_row['event_date']})")
     attended_rows=[dict(student, event_names=', '.join(student['event_names']))
                    for student in attended_by_student.values()]
+    total_attendances=sum(student['events'] for student in attended_rows)
     evrows=conn.execute('SELECT e.name,e.event_date,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e ORDER BY e.event_date DESC').fetchall()
     return render_template('reports.html',rows=rows,events=evrows,
                            high_priority=[r for r in rows if r['events']==0],
-                           attended=attended_rows)
+                           attended=attended_rows,total_attendances=total_attendances)
 
 @app.get('/reports/attended-students.csv')
 @login_required

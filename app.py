@@ -938,12 +938,23 @@ def mark_all_present(eid):
 @login_required
 def reports():
     conn=db(); rows=conn.execute('SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event FROM students s WHERE s.yrc_status="Active" ORDER BY events,s.name').fetchall()
-    attended_rows=conn.execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,
-        COUNT(DISTINCT a.event_id) events, GROUP_CONCAT(e.name || ' (' || e.event_date || ')', ', ') event_names
+    attendance_rows=conn.execute('''SELECT s.id,s.register_no,s.name,s.department,s.class_name,s.section,
+        e.name event_name,e.event_date
         FROM students s JOIN attendance a ON a.student_id=s.id AND a.status='Present'
         JOIN events e ON e.id=a.event_id
         WHERE s.yrc_status='Active'
-        GROUP BY s.id ORDER BY s.name''').fetchall()
+        ORDER BY s.name,e.event_date,e.name''').fetchall()
+    attended_by_student={}
+    for attendance_row in attendance_rows:
+        sid=attendance_row['id']
+        student=attended_by_student.setdefault(sid,{
+            'register_no':attendance_row['register_no'],'name':attendance_row['name'],
+            'department':attendance_row['department'],'class_name':attendance_row['class_name'],
+            'section':attendance_row['section'],'events':0,'event_names':[]})
+        student['events']+=1
+        student['event_names'].append(f"{attendance_row['event_name']} ({attendance_row['event_date']})")
+    attended_rows=[dict(student, event_names=', '.join(student['event_names']))
+                   for student in attended_by_student.values()]
     evrows=conn.execute('SELECT e.name,e.event_date,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e ORDER BY e.event_date DESC').fetchall()
     return render_template('reports.html',rows=rows,events=evrows,
                            high_priority=[r for r in rows if r['events']==0],

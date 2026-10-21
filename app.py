@@ -271,6 +271,19 @@ def student_delete(sid):
     conn.commit(); flash('Student deactivated. Historical participation records were preserved.','success')
     return redirect(url_for('students'))
 
+@app.post('/students/<int:sid>/remove')
+@login_required
+def student_remove(sid):
+    conn=db(); student=conn.execute('SELECT register_no,name,yrc_status FROM students WHERE id=?',(sid,)).fetchone()
+    if not student:
+        flash('Student was not found.','error'); return redirect(url_for('students'))
+    if student['yrc_status']=='Removed':
+        flash('Student is already marked as Removed.','info'); return redirect(url_for('students'))
+    conn.execute("UPDATE students SET yrc_status='Removed',updated_at=CURRENT_TIMESTAMP WHERE id=?",(sid,))
+    audit('Student removed from active roster','student',sid,student['yrc_status'],'Removed')
+    conn.commit(); flash('Student marked as Removed. Historical participation records were preserved.','success')
+    return redirect(url_for('students'))
+
 @app.post('/students/<int:sid>/edit')
 @login_required
 def student_edit(sid):

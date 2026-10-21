@@ -198,6 +198,7 @@ def students():
     where=[]; args=[]
     if q: where.append('(name LIKE ? OR register_no LIKE ?)'); args += [f'%{q}%',f'%{q}%']
     if status: where.append('yrc_status=?'); args.append(status)
+    else: where.append("yrc_status<>'Removed'")
     if dept: where.append('department=?'); args.append(dept)
     if section=='UNASSIGNED': where.append("section=''")
     elif section: where.append('section=?'); args.append(section)

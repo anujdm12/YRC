@@ -1066,7 +1066,7 @@ def attended_students_csv():
         student=attended_by_student.setdefault(row['student_id'],{
             'register_no':row['register_no'],'name':row['name'],'department':row['department'],
             'class_name':row['class_name'],'section':row['section'],'events':[]})
-        student['events'].append(f"{row['event_name']} ({row['event_date']})")
+        student['events'].append(row['event_name'])
     buf=io.StringIO(newline=''); writer=csv.writer(buf)
     writer.writerow(['Register No','Student Name','Department','Class','Section','Events Attended','Total Events Attended'])
     for student in attended_by_student.values():

@@ -16,7 +16,7 @@
 <article class="stat-card"><span class="stat-label">TOTAL EVENT ATTENDANCES</span><strong>{{total_attendances}}</strong><span class="stat-foot">Across students in section 2</span></article>
 </div>
 
-<section class="panel report-priority high-priority"><div class="panel-head"><div><h2>1. Students with 0 events attended</h2><p>Active students with no recorded Present attendance.</p></div><span class="count-pill">{{high_priority|length}} students</span></div>{{student_table(high_priority, 'Everyone active has attended at least one event.')}}</section>
+<section class="panel report-priority high-priority"><div class="panel-head"><div><h2>1. Students with 0 events attended</h2><p>Active students with no recorded Present attendance.</p></div><div class="heading-actions"><span class="count-pill">{{high_priority|length}} students</span><a class="btn primary small" href="{{ url_for('priority_students_csv') }}">Download CSV</a></div></div>{{student_table(high_priority, 'Everyone active has attended at least one event.')}}</section>
 
 <section class="panel report-priority"><div class="panel-head"><div><h2>2. Students with events attended</h2><p>Each student is listed with the events and dates recorded as attended.</p></div><div class="heading-actions"><span class="count-pill">{{attended|length}} students</span><a class="btn primary small" href="{{ url_for('attended_students_csv') }}">Download CSV</a></div></div>
 <div class="table-scroll"><table><thead><tr><th>REGISTER NO.</th><th>STUDENT</th><th>DEPARTMENT</th><th>CLASS</th><th>SECTION</th><th>EVENTS ATTENDED</th><th>EVENTS</th></tr></thead><tbody>

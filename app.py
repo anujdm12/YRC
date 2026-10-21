@@ -1064,7 +1064,8 @@ def attended_students_csv():
     buf=io.StringIO(newline=''); writer=csv.writer(buf)
     writer.writerow(['Register No','Student Name','Department','Class','Section','Event Attended','Event Date'])
     for row in rows:
-        writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in row])
+        values=[row[key] for key in ('register_no','name','department','class_name','section','event_name','event_date')]
+        writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
     return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-student-event-attendance.csv'})
 
 @app.get('/reports/students.csv')
@@ -1075,7 +1076,8 @@ def students_csv():
         FROM students s ORDER BY s.name''').fetchall()
     buf=io.StringIO(); writer=csv.writer(buf)
     writer.writerow(['Register No','Name','Department','Class','Section','Year','Email','Phone','YRC Status','Events Attended'])
-    writer.writerows([tuple(r) for r in rows])
+    columns=('register_no','name','department','class_name','section','year','email','phone','yrc_status','events')
+    writer.writerows([[row[key] for key in columns] for row in rows])
     return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-students.csv'})
 
 @app.get('/reports/priority-students.csv')

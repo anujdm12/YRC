@@ -1056,15 +1056,22 @@ def reports():
 @login_required
 def attended_students_csv():
     rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,
-        e.name event_name,e.event_date
+        s.id student_id,e.name event_name,e.event_date
         FROM students s JOIN attendance a ON a.student_id=s.id AND a.status='Present'
         JOIN events e ON e.id=a.event_id
         WHERE s.yrc_status='Active'
         ORDER BY s.name,e.event_date,e.name''').fetchall()
-    buf=io.StringIO(newline=''); writer=csv.writer(buf)
-    writer.writerow(['Register No','Student Name','Department','Class','Section','Event Attended','Event Date'])
+    attended_by_student={}
     for row in rows:
-        values=[row[key] for key in ('register_no','name','department','class_name','section','event_name','event_date')]
+        student=attended_by_student.setdefault(row['student_id'],{
+            'register_no':row['register_no'],'name':row['name'],'department':row['department'],
+            'class_name':row['class_name'],'section':row['section'],'events':[]})
+        student['events'].append(f"{row['event_name']} ({row['event_date']})")
+    buf=io.StringIO(newline=''); writer=csv.writer(buf)
+    writer.writerow(['Register No','Student Name','Department','Class','Section','Events Attended','Total Events Attended'])
+    for student in attended_by_student.values():
+        values=[student['register_no'],student['name'],student['department'],student['class_name'],
+                student['section'],'; '.join(student['events']),len(student['events'])]
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
     return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-student-event-attendance.csv'})
 

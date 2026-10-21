@@ -278,11 +278,26 @@ def student_remove(sid):
     conn=db(); student=conn.execute('SELECT register_no,name,yrc_status FROM students WHERE id=?',(sid,)).fetchone()
     if not student:
         flash('Student was not found.','error'); return redirect(url_for('students'))
-    if student['yrc_status']=='Removed':
-        flash('Student is already marked as Removed.','info'); return redirect(url_for('students'))
-    conn.execute("UPDATE students SET yrc_status='Removed',updated_at=CURRENT_TIMESTAMP WHERE id=?",(sid,))
-    audit('Student removed from active roster','student',sid,student['yrc_status'],'Removed')
-    conn.commit(); flash('Student marked as Removed. Historical participation records were preserved.','success')
+    try:
+        register_key=normalize_register_no(student['register_no'])
+        staged_rows=conn.execute('SELECT id,register_no,student_id FROM participation_import_rows').fetchall()
+        for row in staged_rows:
+            if row['student_id']==sid or normalize_register_no(row['register_no'])==register_key:
+                conn.execute('DELETE FROM participation_import_rows WHERE id=?',(row['id'],))
+        conn.execute('DELETE FROM attendance WHERE student_id=?',(sid,))
+        conn.execute('DELETE FROM event_participants WHERE student_id=?',(sid,))
+        conn.execute('DELETE FROM selection_history WHERE student_id=?',(sid,))
+        conn.execute("DELETE FROM admin_audit_logs WHERE entity_type='student' AND entity_id=?",(sid,))
+        conn.execute("""DELETE FROM admin_audit_logs WHERE
+            (entity_type='attendance' AND new_value=?) OR
+            (entity_type='event' AND action IN ('Manual participant selection','Participant deselected') AND new_value=?)""",
+            (str(sid),str(sid)))
+        conn.execute('DELETE FROM students WHERE id=?',(sid,))
+        conn.commit()
+    except DB_ERROR:
+        conn.rollback(); flash('The student and history could not be deleted. No partial changes were saved.','error')
+        return redirect(url_for('students'))
+    flash('Student and related history permanently deleted.','success')
     return redirect(url_for('students'))
 
 @app.post('/students/<int:sid>/edit')

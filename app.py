@@ -414,13 +414,16 @@ def participation_import_preview(batch_id):
     if not batch or batch['status']!='Preview': return None
     source_rows=conn.execute('SELECT * FROM participation_import_rows WHERE batch_id=? ORDER BY event_name,student_name',(batch_id,)).fetchall()
     active_events=conn.execute("SELECT * FROM events WHERE status<>'Cancelled' ORDER BY event_date,name").fetchall()
+    roster_names={row['id']:row['name'] for row in conn.execute('SELECT id,name FROM students').fetchall()}
     grouped={}
     for row in source_rows: grouped.setdefault(row['event_name'],[]).append(row)
     summaries=[]
     unmatched=[]
+    duplicates=[]
     importable_count=0
-    already_count=0
+    duplicate_count=0
     ambiguous_count=0
+    upload_names_by_event={}
     name_match_count=sum(1 for row in source_rows if row['student_id'] and row['match_method']=='name')
     for event_name,rows in sorted(grouped.items()):
         key=normalize_import_key(canonical_event_name(event_name))
@@ -428,26 +431,50 @@ def participation_import_preview(batch_id):
         matched_event=matches[0] if len(matches)==1 else None
         ambiguous=len(matches)>1
         if ambiguous: ambiguous_count+=1
-        present_students=set()
+        upload_event_key=matched_event['id'] if matched_event else key
+        upload_names=upload_names_by_event.setdefault(upload_event_key,{})
+        existing_students={}
+        existing_names={}
         if matched_event:
-            present_students={row[0] for row in conn.execute(
-                "SELECT student_id FROM attendance WHERE event_id=? AND status='Present'",
-                (matched_event['id'],)).fetchall()}
+            existing_rows=conn.execute('''SELECT DISTINCT s.id,s.name
+                FROM event_participants p JOIN students s ON s.id=p.student_id
+                WHERE p.event_id=?
+                UNION
+                SELECT DISTINCT s.id,s.name
+                FROM attendance a JOIN students s ON s.id=a.student_id
+                WHERE a.event_id=?''',(matched_event['id'],matched_event['id'])).fetchall()
+            existing_students={row['id']:row['name'] for row in existing_rows}
+            existing_names={normalize_student_name(row['name']):row['name'] for row in existing_rows
+                            if normalize_student_name(row['name'])}
         ready=[]
-        event_already=0
+        event_duplicates=0
         event_unmatched=0
         for row in rows:
             if not row['student_id']:
                 event_unmatched+=1; unmatched.append(row); continue
-            if matched_event and row['student_id'] in present_students:
-                event_already+=1; already_count+=1; continue
+            name_key=normalize_student_name(roster_names.get(row['student_id'],row['student_name']))
+            reason=''
+            if matched_event and row['student_id'] in existing_students:
+                reason=f"{existing_students[row['student_id']]} is already in this event."
+            elif matched_event and name_key in existing_names:
+                reason=f"The name already appears in this event as {existing_names[name_key]}."
+            elif name_key and name_key in upload_names:
+                reason=f"The same name appears more than once for this event in the CSV (first roll number: {upload_names[name_key]})."
+            if reason:
+                event_duplicates+=1
+                duplicates.append({**dict(row),'duplicate_reason':reason})
+                continue
+            if name_key:
+                upload_names[name_key]=row['register_no'] or row['student_id']
             ready.append(row)
         importable_count+=len(ready)
         summaries.append({'name':event_name,'rows':len(rows),'matched':len(rows)-event_unmatched,'unmatched':event_unmatched,
-                          'already':event_already,'to_import':len(ready),'event':matched_event,
+                          'already':event_duplicates,'to_import':len(ready),'event':matched_event,
                           'ambiguous':ambiguous,'date_field':'event_date_'+str(len(summaries))})
+        duplicate_count+=event_duplicates
     return {'batch':batch,'events':summaries,'unmatched':unmatched,'unmatched_count':len(unmatched),
-            'importable_count':importable_count,'already_count':already_count,'ambiguous_count':ambiguous_count,
+            'duplicates':duplicates,'duplicate_count':duplicate_count,
+            'importable_count':importable_count,'already_count':duplicate_count,'ambiguous_count':ambiguous_count,
             'name_match_count':name_match_count}
 
 @app.route('/attendance/import',methods=['GET','POST'])
@@ -475,19 +502,35 @@ def participation_import():
     headers=reader.fieldnames or []
     normalized={re.sub(r'[^a-z0-9]+',' ',h.casefold()).strip():h for h in headers}
     name_col=next((h for key,h in normalized.items() if 'full name' in key or 'student name' in key or key in ('name','your name')),None)
-    register_col=next((h for key,h in normalized.items() if (('register' in key or 'registration' in key) and ('number' in key or 'no' in key)) or key in ('usn','usn no')),None)
+    register_col=next((h for key,h in normalized.items() if ((('register' in key or 'registration' in key or 'roll' in key) and ('number' in key or 'no' in key)) or key in ('usn','usn no'))),None)
     activity_col=next((h for key,h in normalized.items() if 'participated in so far' in key or
                        ('yrc' in key and ('activity' in key or 'event' in key)) or
                        ('activities' in key and ('participat' in key or 'attend' in key))),None)
+    event_yes_cols=[]
+    for header in headers:
+        cleaned=re.sub(r'^\s*\d+\s*[.)-]?\s*','',header).strip()
+        match=re.match(r'(?:did you\s+)?participat(?:e|ed)\s+in\s+(.+?)[?!.]*\s*$',cleaned,re.I)
+        if match and header!=activity_col:
+            event_label=canonical_event_name(match.group(1).strip())
+            if event_label and normalize_import_key(event_label) not in ('so far','any events','any activities'):
+                event_yes_cols.append((header,event_label))
     timestamp_col=next((h for key,h in normalized.items() if key=='timestamp'),None)
     other_col=next((h for key,h in normalized.items() if key=='column 1'),None)
-    if not name_col or not register_col or not activity_col:
+    if not name_col or not register_col or (not activity_col and not event_yes_cols):
         if 'event name' in normalized and 'attendee count' in normalized:
             flash('This CSV contains event totals, not individual student responses. It has no student names or register numbers, so attendance cannot be assigned. Export the original Google Forms responses tab as CSV and upload that file. No data was imported.','error')
             return redirect(url_for('participation_import'))
         found=', '.join(headers[:8]) or 'no headers found'
-        flash(f'Could not identify Full Name, Register Number, and the YRC activities question columns. Headers found: {found}. Upload the Google Forms response CSV, not the student roster CSV. No data was imported.','error')
+        flash(f'Could not identify Full Name, Register Number, and an activity column or event participation column. Headers found: {found}. No data was imported.','error')
         return redirect(url_for('participation_import'))
+    def choices_from_row(row):
+        choices=parse_event_choices(row.get(activity_col,'')) if activity_col else []
+        if other_col:
+            choices.extend(choice for choice in parse_event_choices(row.get(other_col,'')) if choice not in choices)
+        for header,event_label in event_yes_cols:
+            if normalize_import_key(row.get(header,'')) in ('yes','y','true','1','participated','present') and event_label not in choices:
+                choices.append(event_label)
+        return choices
     responses=[]
     missing_register_rows=[]
     response_count=0
@@ -497,13 +540,11 @@ def participation_import():
         register_no=' '.join(str(row.get(register_col) or '').split())
         name=' '.join(str(row.get(name_col) or '').split())
         if not register_no:
-            choices=parse_event_choices(row.get(activity_col,''))
-            if other_col: choices.extend(choice for choice in parse_event_choices(row.get(other_col,'')) if choice not in choices)
+            choices=choices_from_row(row)
             missing_register_rows.append({'row_number':row_number,'name':name,'choices':choices})
             continue
         key=normalize_register_no(register_no)
-        choices=parse_event_choices(row.get(activity_col,''))
-        if other_col: choices.extend(choice for choice in parse_event_choices(row.get(other_col,'')) if choice not in choices)
+        choices=choices_from_row(row)
         responses.append({'row_number':row_number,'register_no':register_no,'register_key':key,'name':name,
                           'choices':choices,'timestamp':str(row.get(timestamp_col) or '') if timestamp_col else ''})
     if not responses and not any(item['choices'] for item in missing_register_rows):
@@ -618,17 +659,30 @@ def participation_import_confirm(batch_id):
                 event_ids[event['name']]=cur.lastrowid
         skipped=0
         current_roster_by_reg={}; current_roster_by_name={}
+        current_roster_name_by_id={}
         for student_row in conn.execute('SELECT id,register_no,name FROM students').fetchall():
             current_roster_by_reg.setdefault(normalize_register_no(student_row['register_no']),[]).append(student_row['id'])
             current_roster_by_name.setdefault(normalize_student_name(student_row['name']),[]).append(student_row['id'])
+            current_roster_name_by_id[student_row['id']]=student_row['name']
         event_id_values=list(set(event_ids.values()))
-        present_pairs=set()
+        existing_students_by_event={}
+        existing_names_by_event={}
         if event_id_values:
             placeholders=','.join('?' for _ in event_id_values)
-            present_pairs={(item['event_id'],item['student_id']) for item in conn.execute(
-                f"SELECT event_id,student_id FROM attendance WHERE status='Present' AND event_id IN ({placeholders})",
-                event_id_values).fetchall()}
-        participants_to_add=[]; attendance_to_add=[]; queued_pairs=set()
+            existing_rows=conn.execute(f'''SELECT DISTINCT p.event_id,s.id,s.name
+                FROM event_participants p JOIN students s ON s.id=p.student_id
+                WHERE p.event_id IN ({placeholders})
+                UNION
+                SELECT DISTINCT a.event_id,s.id,s.name
+                FROM attendance a JOIN students s ON s.id=a.student_id
+                WHERE a.event_id IN ({placeholders})''',event_id_values+event_id_values).fetchall()
+            for item in existing_rows:
+                existing_students_by_event.setdefault(item['event_id'],set()).add(item['id'])
+                name_key=normalize_student_name(item['name'])
+                if name_key:
+                    existing_names_by_event.setdefault(item['event_id'],set()).add(name_key)
+        participants_to_add=[]; attendance_to_add=[]; queued_pairs=set(); queued_names=set()
+        duplicate_skipped=0
         for row in rows:
             event_id=event_ids.get(row['event_name'])
             if not event_id:
@@ -637,9 +691,16 @@ def participation_import_confirm(batch_id):
             if not student_id:
                 skipped+=1; continue
             pair=(event_id,student_id)
-            if pair in present_pairs or pair in queued_pairs:
+            name_key=normalize_student_name(current_roster_name_by_id.get(student_id,row['student_name']))
+            event_name_key=(event_id,name_key)
+            if (student_id in existing_students_by_event.get(event_id,set()) or
+                    (name_key and name_key in existing_names_by_event.get(event_id,set())) or
+                    pair in queued_pairs or (name_key and event_name_key in queued_names)):
+                duplicate_skipped+=1
                 skipped+=1; continue
             queued_pairs.add(pair)
+            if name_key:
+                queued_names.add(event_name_key)
             participants_to_add.append((event_id,student_id,session['admin_id'],'Selected'))
             attendance_to_add.append((event_id,student_id,'Present',session['admin_id']))
         if participants_to_add:
@@ -650,12 +711,13 @@ def participation_import_confirm(batch_id):
         conn.execute('UPDATE participation_import_batches SET status="Completed",imported_count=?,skipped_count=?,completed_at=CURRENT_TIMESTAMP WHERE id=?',
                      (imported,skipped,batch_id))
         conn.execute('DELETE FROM participation_import_rows WHERE batch_id=?',(batch_id,))
-        audit('Participation sheet imported','participation_import',0,'',f'{imported} records; batch {batch_id}')
+        audit('Participation sheet imported','participation_import',0,'',
+              f'{imported} records; {duplicate_skipped} duplicate name(s) rejected; batch {batch_id}')
         conn.commit()
     except DB_IMPORT_ERROR:
         conn.rollback(); flash('The import could not be completed. No partial records were saved. Review the preview and try again.','error')
         return redirect(url_for('participation_import_review',batch_id=batch_id))
-    flash(f'Import complete: {imported} participation record(s) added or updated; {skipped} skipped. The next import will not duplicate these attended records.','success')
+    flash(f'Import complete: {imported} participation record(s) added; {duplicate_skipped} duplicate name(s) rejected; {skipped-duplicate_skipped} unmatched record(s) skipped.','success')
     return redirect(url_for('attendance_page'))
 
 @app.get('/selection')

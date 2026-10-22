@@ -1049,8 +1049,9 @@ def reports():
     total_attendances=sum(student['events'] for student in attended_rows)
     evrows=conn.execute('SELECT e.name,e.event_date,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e ORDER BY e.event_date DESC').fetchall()
     return render_template('reports.html',rows=rows,events=evrows,
-                           high_priority=[r for r in rows if r['events']==0],
-                           attended=attended_rows,total_attendances=total_attendances)
+                           not_credit_eligible=[r for r in rows if r['events'] < 3],
+                           credit_eligible=[r for r in attended_rows if r['events'] >= 3],
+                           total_attendances=total_attendances)
 
 @app.get('/reports/attended-students.csv')
 @login_required
@@ -1070,6 +1071,8 @@ def attended_students_csv():
     buf=io.StringIO(newline=''); writer=csv.writer(buf)
     writer.writerow(['Register No','Student Name','Department','Class','Section','Events Attended','Total Events Attended'])
     for student in attended_by_student.values():
+        if len(student['events']) < 3:
+            continue
         values=[student['register_no'],student['name'],student['department'],student['class_name'],
                 student['section'],'; '.join(student['events']),len(student['events'])]
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
@@ -1093,12 +1096,12 @@ def priority_students_csv():
     import csv, io
     rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone
         FROM students s WHERE s.yrc_status='Active'
-        AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.student_id=s.id AND a.status='Present')
+        AND (SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status='Present') < 3
         ORDER BY s.department,s.class_name,s.name''').fetchall()
     buf=io.StringIO(newline=''); writer=csv.writer(buf)
     writer.writerow(['Register No','Name','Department','Class','Section','Email','Phone','Priority'])
     for row in rows:
-        values=[row['register_no'],row['name'],row['department'],row['class_name'],row['section'],row['email'],row['phone'],'High - no events attended']
+        values=[row['register_no'],row['name'],row['department'],row['class_name'],row['section'],row['email'],row['phone'],'Not eligible - fewer than 3 events attended']
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
     return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-high-priority-students.csv'})
 

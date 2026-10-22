@@ -1047,11 +1047,19 @@ def reports():
     attended_rows=[dict(student, event_names=', '.join(student['event_names']))
                    for student in attended_by_student.values()]
     total_attendances=sum(student['events'] for student in attended_rows)
+    not_credit_eligible=[r for r in rows if r['events'] < 3]
+    ineligible_by_department={}
+    for student in not_credit_eligible:
+        department=(student['department'] or 'Unassigned').strip()
+        ineligible_by_department[department]=ineligible_by_department.get(department,0)+1
+    department_counts=[{'name':department,'count':ineligible_by_department.get(department,0)}
+                       for department in sorted({(r['department'] or 'Unassigned').strip() for r in rows})]
     evrows=conn.execute('SELECT e.name,e.event_date,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e ORDER BY e.event_date DESC').fetchall()
     return render_template('reports.html',rows=rows,events=evrows,
-                           not_credit_eligible=[r for r in rows if r['events'] < 3],
+                           not_credit_eligible=not_credit_eligible,
                            credit_eligible=[r for r in attended_rows if r['events'] >= 3],
-                           total_attendances=total_attendances)
+                           total_attendances=total_attendances,
+                           department_counts=department_counts)
 
 @app.get('/reports/attended-students.csv')
 @login_required

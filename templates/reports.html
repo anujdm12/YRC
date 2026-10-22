@@ -8,12 +8,12 @@
 </tbody></table></div>
 {% endmacro %}
 {% block content %}
-<div class="page-heading"><div><div class="eyebrow">STUDENT PARTICIPATION</div><h1>Reports</h1><p class="subhead">See who has attended events and review each student’s attendance history.</p></div></div>
+<div class="page-heading"><div><div class="eyebrow">STUDENT PARTICIPATION</div><h1>Reports</h1><p class="subhead">Review credit eligibility by department and each student’s attendance history.</p></div></div>
 
 <div class="stats-grid reports-priority-summary">
-<article class="stat-card"><span class="stat-label">NOT ELIGIBLE FOR CREDITS</span><strong>{{not_credit_eligible|length}}</strong><span class="stat-foot">Active students with 0–2 events attended</span></article>
-<article class="stat-card"><span class="stat-label">ELIGIBLE FOR CREDITS</span><strong>{{credit_eligible|length}}</strong><span class="stat-foot">Active students with 3+ events attended</span></article>
-<article class="stat-card"><span class="stat-label">TOTAL EVENT ATTENDANCES</span><strong>{{total_attendances}}</strong><span class="stat-foot">Across active students</span></article>
+<article class="stat-card summary-card"><span class="stat-label">NOT ELIGIBLE · ALL DEPARTMENTS</span><strong>{{not_credit_eligible|length}}</strong><span class="stat-foot">Active students with 0–2 events attended</span></article>
+{% for department in department_counts %}<article class="stat-card department-stat"><span class="stat-label">{{department.name}}</span><strong>{{department.count}}</strong><span class="stat-foot">Not eligible · 0–2 events attended</span></article>{% endfor %}
+<article class="stat-card summary-card"><span class="stat-label">ELIGIBLE FOR CREDITS</span><strong>{{credit_eligible|length}}</strong><span class="stat-foot">Active students with 3+ events attended</span></article>
 </div>
 
 <section class="panel report-priority high-priority"><div class="panel-head"><div><h2>1. Students not eligible for credits</h2><p>Active students with 0–2 recorded event attendances.</p></div><div class="heading-actions"><span class="count-pill">{{not_credit_eligible|length}} students</span><a class="btn primary small" href="{{ url_for('priority_students_csv') }}">Download CSV</a></div></div>{{student_table(not_credit_eligible, 'No active students fall below the 3-event threshold.')}}</section>

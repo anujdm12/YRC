@@ -1076,7 +1076,7 @@ def attended_students_csv():
         values=[student['register_no'],student['name'],student['department'],student['class_name'],
                 student['section'],'; '.join(student['events']),len(student['events'])]
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
-    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-student-event-attendance.csv'})
+    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=students-eligible-for-credits.csv'})
 
 @app.get('/reports/students.csv')
 @login_required
@@ -1103,7 +1103,7 @@ def priority_students_csv():
     for row in rows:
         values=[row['register_no'],row['name'],row['department'],row['class_name'],row['section'],row['email'],row['phone'],'Not eligible - fewer than 3 events attended']
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
-    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-high-priority-students.csv'})
+    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=students-not-eligible-for-credits.csv'})
 
 @app.get('/settings')
 @login_required

@@ -1309,41 +1309,52 @@ def eligibility():
                            semester_filter=semester_filter,
                            drive_api_configured=bool(os.getenv('GOOGLE_DRIVE_API_KEY','').strip()))
 
-def semester_eligibility(semester_id, student_id):
-    """Calculate eligibility only from verified attendance and verified required certificates."""
+def semester_eligibility_many(semester_id, student_ids):
+    """Calculate a semester's results with a fixed number of database round trips."""
     conn=db()
-    semester=conn.execute('SELECT * FROM semesters WHERE id=?',(semester_id,)).fetchone()
-    if not semester:
-        return {'status':'INCOMPLETE_RECORDS','activities':0,'minimum':0,'certificates':[],'reasons':['Semester configuration is missing.']}
-    rules=conn.execute('SELECT * FROM semester_rules WHERE semester_id=? AND enabled=1 ORDER BY id',(semester_id,)).fetchall()
+    ids=list(dict.fromkeys(student_ids))
+    if not ids:
+        return {}
+    semester=conn.execute('SELECT id FROM semesters WHERE id=?',(semester_id,)).fetchone()
+    rules=conn.execute('SELECT * FROM semester_rules WHERE semester_id=? AND enabled=1 ORDER BY id',(semester_id,)).fetchall() if semester else []
     min_rule=next((r for r in rules if r['rule_type']=='minimum_activities' and r['mandatory']),None)
     cert_rules=[name.strip() for r in rules if r['rule_type']=='certificate' and r['mandatory'] for name in r['value'].split(',') if name.strip()]
-    if not rules:
-        return {'status':'INCOMPLETE_RECORDS','activities':0,'minimum':0,'certificates':[],'reasons':['Eligibility criteria have not been configured.']}
-    semester_filter=' AND e.semester=?'
-    activities=conn.execute("SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=? AND a.status='Present' AND e.status<>'Cancelled' AND e.counts_for_eligibility=1"+semester_filter,(student_id,semester_id)).fetchone()[0]
     minimum=int(min_rule['value']) if min_rule else 0
-    reasons=[]
-    if min_rule and activities<minimum:
-        remaining=minimum-activities
-        reasons.append(f'Complete {remaining} more eligible activit{"y" if remaining==1 else "ies"}.')
-    cert_results=[]
-    pending=False
-    for cert_type in cert_rules:
-        cert=conn.execute('SELECT status FROM semester_certificates WHERE semester_id=? AND student_id=? AND certificate_type=?',(semester_id,student_id,cert_type)).fetchone()
-        state=cert['status'] if cert else 'Missing'
-        cert_results.append({'type':cert_type,'status':state})
-        if state!='Verified':
-            if state=='Submitted':
-                pending=True; reasons.append(f'{cert_type} certificate is awaiting verification.')
-            elif state=='Rejected': reasons.append(f'{cert_type} certificate was rejected; resubmission is required.')
-            else: reasons.append(f'{cert_type} certificate submission is pending.')
-    if not reasons:
-        reasons=['You have met all eligibility requirements.']
-    status='ELIGIBLE' if activities>=minimum and all(c['status']=='Verified' for c in cert_results) else ('PENDING_VERIFICATION' if pending else 'NOT_ELIGIBLE')
-    reason_text='; '.join(reasons)
-    conn.execute('INSERT INTO semester_eligibility_history(semester_id,student_id,status,reasons) VALUES(?,?,?,?) ON CONFLICT(semester_id,student_id) DO UPDATE SET status=excluded.status,reasons=excluded.reasons,calculated_at=CURRENT_TIMESTAMP',(semester_id,student_id,status,reason_text))
-    return {'status':status,'activities':activities,'minimum':minimum,'certificates':cert_results,'reasons':reasons}
+    placeholders=','.join('?' for _ in ids)
+    activity_rows=conn.execute("SELECT a.student_id,COUNT(DISTINCT a.event_id) AS activities FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.status='Present' AND e.status<>'Cancelled' AND e.counts_for_eligibility=1 AND e.semester=? AND a.student_id IN ("+placeholders+") GROUP BY a.student_id",[semester_id,*ids]).fetchall() if semester else []
+    activities={r['student_id']:r['activities'] for r in activity_rows}
+    cert_rows=conn.execute('SELECT student_id,certificate_type,status FROM semester_certificates WHERE semester_id=? AND student_id IN ('+placeholders+')',[semester_id,*ids]).fetchall() if semester else []
+    cert_status={(r['student_id'],r['certificate_type']):r['status'] for r in cert_rows}
+    results={}; history=[]
+    for student_id in ids:
+        count=activities.get(student_id,0)
+        if not semester or not rules:
+            result={'status':'INCOMPLETE_RECORDS','activities':count,'minimum':minimum,'certificates':[],'reasons':['Eligibility criteria have not been configured.' if semester else 'Semester configuration is missing.']}
+        else:
+            reasons=[]
+            if min_rule and count<minimum:
+                remaining=minimum-count
+                reasons.append(f'Complete {remaining} more eligible activit{"y" if remaining==1 else "ies"}.')
+            cert_results=[]; pending=False
+            for cert_type in cert_rules:
+                state=cert_status.get((student_id,cert_type),'Missing')
+                cert_results.append({'type':cert_type,'status':state})
+                if state=='Submitted':
+                    pending=True; reasons.append(f'{cert_type} certificate is awaiting verification.')
+                elif state=='Rejected': reasons.append(f'{cert_type} certificate was rejected; resubmission is required.')
+                elif state!='Verified': reasons.append(f'{cert_type} certificate submission is pending.')
+            if not reasons:
+                reasons=['You have met all eligibility requirements.']
+            status='ELIGIBLE' if count>=minimum and all(c['status']=='Verified' for c in cert_results) else ('PENDING_VERIFICATION' if pending else 'NOT_ELIGIBLE')
+            result={'status':status,'activities':count,'minimum':minimum,'certificates':cert_results,'reasons':reasons}
+        results[student_id]=result
+        history.append((semester_id,student_id,result['status'],'; '.join(result['reasons'])))
+    conn.executemany('INSERT INTO semester_eligibility_history(semester_id,student_id,status,reasons) VALUES(?,?,?,?) ON CONFLICT(semester_id,student_id) DO UPDATE SET status=excluded.status,reasons=excluded.reasons,calculated_at=CURRENT_TIMESTAMP',history)
+    return results
+
+def semester_eligibility(semester_id, student_id):
+    """Calculate one student's result through the shared batch calculation service."""
+    return semester_eligibility_many(semester_id,[student_id])[student_id]
 
 @app.get('/semesters')
 @login_required
@@ -1378,7 +1389,8 @@ def semester_detail(semester_id):
             if minimum>0: conn.execute("INSERT INTO semester_rules(semester_id,rule_type,value,mandatory) VALUES(?,'minimum_activities',?,1)",(semester_id,str(minimum)))
             if cert_types: conn.execute("INSERT INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required) VALUES(?,'certificate',?,1,1)",(semester_id,', '.join(cert_types)))
             audit('Semester eligibility rules changed','semester',semester_id,old,{'minimum_activities':minimum,'certificates':cert_types})
-            for student in conn.execute("SELECT id FROM students WHERE yrc_status='Active'").fetchall(): semester_eligibility(semester_id,student['id'])
+            active_ids=[student['id'] for student in conn.execute("SELECT id FROM students WHERE yrc_status='Active'").fetchall()]
+            semester_eligibility_many(semester_id,active_ids)
             conn.commit(); flash('Criteria saved and eligibility recalculated.','success')
         elif action=='semester':
             locked=1-int(semester['locked'])
@@ -1416,10 +1428,8 @@ def semester_detail(semester_id):
     cert_types=', '.join(r['value'] for r in rules if r['rule_type']=='certificate')
     min_rule=next((r for r in rules if r['rule_type']=='minimum_activities'),None)
     students=conn.execute("SELECT id,register_no,name,department,class_name,section FROM students WHERE yrc_status='Active' ORDER BY name").fetchall()
-    rows=[]
-    for student in students:
-        result=semester_eligibility(semester_id,student['id'])
-        rows.append({'student':student,'result':result})
+    results=semester_eligibility_many(semester_id,[student['id'] for student in students])
+    rows=[{'student':student,'result':results[student['id']]} for student in students]
     conn.commit()
     certificates=conn.execute('SELECT c.*,s.name,s.register_no FROM semester_certificates c JOIN students s ON s.id=c.student_id WHERE c.semester_id=? ORDER BY c.created_at DESC',(semester_id,)).fetchall()
     counts={key:sum(1 for row in rows if row['result']['status']==key) for key in ('ELIGIBLE','NOT_ELIGIBLE','PENDING_VERIFICATION','INCOMPLETE_RECORDS')}
@@ -1433,8 +1443,9 @@ def semester_report_csv(semester_id):
     output=io.StringIO(); writer=csv.writer(output)
     writer.writerow(['Semester','Register number','Student','Department','Class','Activities completed','Activities required','Certificates','Status','Remaining requirements'])
     students=db().execute("SELECT id,register_no,name,department,class_name FROM students WHERE yrc_status='Active' ORDER BY name").fetchall()
+    results=semester_eligibility_many(semester_id,[student['id'] for student in students])
     for student in students:
-        result=semester_eligibility(semester_id,student['id'])
+        result=results[student['id']]
         certs='; '.join(f"{c['type']}: {c['status']}" for c in result['certificates'])
         writer.writerow([semester['name'],student['register_no'],student['name'],student['department'],student['class_name'],result['activities'],result['minimum'],certs,result['status'],'; '.join(result['reasons'])])
     db().commit()

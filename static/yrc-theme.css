@@ -18,3 +18,5 @@ html{background:#0b0b0f;color-scheme:dark}body{min-height:100vh;color:#f7f5f5;ba
 @media(max-width:700px){.welcome-row{min-height:0;padding:18px 15px;background:radial-gradient(ellipse at 88% 50%,rgba(227,24,55,.17),transparent 16rem),linear-gradient(110deg,#1e1218,#17151a)}.welcome-row:after{right:-18px;opacity:.45}.welcome-row:before{right:-25px;opacity:.55}.sidebar{background:rgba(13,12,16,.98)}.mobile-nav{background:rgba(12,12,16,.97)}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}.welcome-row:before,.welcome-row:after,.fair-selection-heading:before,.fair-selection-heading:after{animation:none!important}}
 
+
+.semester-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:14px}.semester-card{display:flex;flex-direction:column;gap:10px;text-decoration:none}.semester-card h2{margin:0}.semester-card p{margin:0}.semester-card .text-link{margin-top:auto}.semester-card .badge{align-self:flex-start}.semester-card small{line-height:1.6;color:var(--muted)}

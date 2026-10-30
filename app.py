@@ -4,6 +4,7 @@ import time
 import click
 import csv
 import io
+import json
 import re
 import unicodedata
 from datetime import datetime, date
@@ -11,6 +12,9 @@ from functools import wraps
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, jsonify, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 from database import connect_db, DB_ERROR, DB_INTEGRITY_ERROR, DB_IMPORT_ERROR, USING_POSTGRES
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from urllib.request import Request, urlopen
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY') or secrets.token_hex(32)
@@ -18,6 +22,8 @@ app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax',
                   SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE', '0') == '1')
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 DB_PATH = os.getenv('DATABASE_PATH', 'yrc.db')
+ELIGIBILITY_EVENT_THRESHOLD = 3
+ELIGIBILITY_CERTIFICATE_THRESHOLD = 3
 
 @app.context_processor
 def inject_now():
@@ -28,14 +34,18 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS admin_roles(admin_id INTEGER PRIMARY KEY REFERENCES admins(id) ON DELETE CASCADE, role TEXT NOT NULL DEFAULT 'super_admin', department TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS students(id INTEGER PRIMARY KEY, register_no TEXT UNIQUE NOT NULL, name TEXT NOT NULL, department TEXT NOT NULL, class_name TEXT NOT NULL DEFAULT '', section TEXT NOT NULL DEFAULT '', year INTEGER NOT NULL, email TEXT, phone TEXT, yrc_status TEXT NOT NULL DEFAULT 'Active', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, event_date TEXT NOT NULL, start_time TEXT, end_time TEXT, venue TEXT, max_participants INTEGER, deadline TEXT, status TEXT NOT NULL DEFAULT 'Upcoming', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, event_date TEXT NOT NULL, start_time TEXT, end_time TEXT, venue TEXT, max_participants INTEGER, deadline TEXT, status TEXT NOT NULL DEFAULT 'Upcoming', semester INTEGER, counts_for_eligibility INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS event_participants(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE, student_id INTEGER NOT NULL REFERENCES students(id), selection_status TEXT NOT NULL DEFAULT 'Selected', selected_at TEXT DEFAULT CURRENT_TIMESTAMP, selected_by INTEGER, UNIQUE(event_id,student_id));
 CREATE TABLE IF NOT EXISTS selection_history(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, decision TEXT NOT NULL, attended_count INTEGER NOT NULL DEFAULT 0, seat_offers INTEGER NOT NULL DEFAULT 0, priority_score INTEGER NOT NULL DEFAULT 0, tie_break TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', decided_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS attendance(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, status TEXT NOT NULL, marked_at TEXT DEFAULT CURRENT_TIMESTAMP, marked_by INTEGER, UNIQUE(event_id,student_id), FOREIGN KEY(event_id,student_id) REFERENCES event_participants(event_id,student_id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS attendance(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, status TEXT NOT NULL, marked_at TEXT DEFAULT CURRENT_TIMESTAMP, marked_by INTEGER, credit_points INTEGER NOT NULL DEFAULT 0, UNIQUE(event_id,student_id), FOREIGN KEY(event_id,student_id) REFERENCES event_participants(event_id,student_id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS login_attempts(id INTEGER PRIMARY KEY, username TEXT NOT NULL, attempted_at INTEGER NOT NULL, success INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS admin_audit_logs(id INTEGER PRIMARY KEY, admin_id INTEGER, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS participation_import_batches(id TEXT PRIMARY KEY, admin_id INTEGER NOT NULL, filename TEXT NOT NULL, response_count INTEGER NOT NULL DEFAULT 0, unique_respondents INTEGER NOT NULL DEFAULT 0, repeated_respondents INTEGER NOT NULL DEFAULT 0, missing_register_count INTEGER NOT NULL DEFAULT 0, record_count INTEGER NOT NULL DEFAULT 0, imported_count INTEGER NOT NULL DEFAULT 0, skipped_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'Preview', created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT);
 CREATE TABLE IF NOT EXISTS participation_import_rows(id INTEGER PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES participation_import_batches(id) ON DELETE CASCADE, source_row INTEGER NOT NULL, register_no TEXT NOT NULL, student_name TEXT NOT NULL, event_name TEXT NOT NULL, student_id INTEGER, error TEXT NOT NULL DEFAULT '', match_method TEXT NOT NULL DEFAULT 'register_no', UNIQUE(batch_id,source_row,event_name));
+CREATE TABLE IF NOT EXISTS semesters(id INTEGER PRIMARY KEY, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, locked INTEGER NOT NULL DEFAULT 0, academic_year TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS semester_rules(id INTEGER PRIMARY KEY, semester_id INTEGER NOT NULL REFERENCES semesters(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, value TEXT NOT NULL DEFAULT '', mandatory INTEGER NOT NULL DEFAULT 1, verification_required INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, UNIQUE(semester_id,rule_type));
+CREATE TABLE IF NOT EXISTS semester_certificates(id INTEGER PRIMARY KEY, semester_id INTEGER NOT NULL REFERENCES semesters(id), student_id INTEGER NOT NULL REFERENCES students(id), certificate_type TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'Submitted', verified_by INTEGER, verified_at TEXT DEFAULT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(semester_id,student_id,certificate_type));
+CREATE TABLE IF NOT EXISTS semester_eligibility_history(id INTEGER PRIMARY KEY, semester_id INTEGER NOT NULL REFERENCES semesters(id), student_id INTEGER NOT NULL REFERENCES students(id), status TEXT NOT NULL, reasons TEXT NOT NULL DEFAULT '', calculated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(semester_id,student_id));
 '''
 
 def db():
@@ -51,11 +61,23 @@ def close_db(_):
 def init_db():
     conn = connect_db(DB_PATH)
     conn.executescript(SCHEMA)
+    for semester_number in range(1, 5):
+        conn.execute('INSERT OR IGNORE INTO semesters(id,name) VALUES(?,?)', (semester_number, f'Semester {semester_number}'))
+    conn.execute("INSERT OR IGNORE INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required) VALUES(1,'minimum_activities','2',1,0)")
+    conn.execute("INSERT OR IGNORE INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required) VALUES(1,'certificate','ICRC',1,1)")
     student_columns = {row[1] for row in conn.execute('PRAGMA table_info(students)')}
     if 'class_name' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN class_name TEXT NOT NULL DEFAULT ''")
     if 'section' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN section TEXT NOT NULL DEFAULT ''")
+    event_columns={row[1] for row in conn.execute('PRAGMA table_info(events)')}
+    if 'semester' not in event_columns:
+        conn.execute('ALTER TABLE events ADD COLUMN semester INTEGER')
+    if 'counts_for_eligibility' not in event_columns:
+        conn.execute('ALTER TABLE events ADD COLUMN counts_for_eligibility INTEGER NOT NULL DEFAULT 1')
+    attendance_columns={row[1] for row in conn.execute('PRAGMA table_info(attendance)')}
+    if 'credit_points' not in attendance_columns:
+        conn.execute('ALTER TABLE attendance ADD COLUMN credit_points INTEGER NOT NULL DEFAULT 0')
     import_row_columns={row[1] for row in conn.execute('PRAGMA table_info(participation_import_rows)')}
     if 'match_method' not in import_row_columns:
         conn.execute("ALTER TABLE participation_import_rows ADD COLUMN match_method TEXT NOT NULL DEFAULT 'register_no'")
@@ -134,6 +156,73 @@ def login_required(fn):
 
 def audit(action, entity, entity_id, old='', new=''):
     db().execute('INSERT INTO admin_audit_logs(admin_id,action,entity_type,entity_id,old_value,new_value) VALUES(?,?,?,?,?,?)', (session.get('admin_id'), action, entity, entity_id, str(old), str(new)))
+
+class DriveFolderError(ValueError):
+    pass
+
+def extract_drive_folder_id(folder_url):
+    try:
+        parsed=urlsplit(folder_url.strip())
+    except ValueError as exc:
+        raise DriveFolderError('Enter a valid Google Drive folder link.') from exc
+    if parsed.scheme != 'https' or parsed.hostname != 'drive.google.com':
+        raise DriveFolderError('Enter a Google Drive folder link using https://drive.google.com.')
+    match=re.fullmatch(r'/drive/folders/([A-Za-z0-9_-]+)', parsed.path)
+    if match:
+        return match.group(1)
+    folder_id=parse_qs(parsed.query).get('id',[''])[0]
+    if folder_id and re.fullmatch(r'[A-Za-z0-9_-]+',folder_id):
+        return folder_id
+    raise DriveFolderError('The link must point to a Google Drive folder.')
+
+def fetch_drive_pdf_names(folder_id, api_key):
+    if not api_key:
+        raise DriveFolderError('Drive checking is not configured. Set GOOGLE_DRIVE_API_KEY in the server environment.')
+    folder_params=urlencode({'fields':'id,mimeType','supportsAllDrives':'true','key':api_key})
+    folder_url=f'https://www.googleapis.com/drive/v3/files/{quote(folder_id,safe="")}?{folder_params}'
+    try:
+        with urlopen(Request(folder_url,headers={'Accept':'application/json'}),timeout=20) as response:
+            folder=json.loads(response.read().decode('utf-8'))
+    except HTTPError as exc:
+        raise DriveFolderError('Google Drive could not read this folder. Check that it is shared for public viewing and that the Drive API key is valid.') from exc
+    except URLError as exc:
+        raise DriveFolderError('Could not connect to Google Drive. Check the server connection and try again.') from exc
+    except (UnicodeDecodeError,json.JSONDecodeError) as exc:
+        raise DriveFolderError('Google Drive returned an unreadable response. Try again later.') from exc
+    if not isinstance(folder,dict) or folder.get('mimeType')!='application/vnd.google-apps.folder':
+        raise DriveFolderError('The Drive link does not point to a folder.')
+    names=[]
+    page_token=''
+    for _ in range(50):
+        params={
+            'q':f"'{folder_id}' in parents and mimeType='application/pdf' and trashed=false",
+            'fields':'nextPageToken,files(name)',
+            'pageSize':1000,
+            'supportsAllDrives':'true',
+            'includeItemsFromAllDrives':'true',
+            'key':api_key,
+        }
+        if page_token:
+            params['pageToken']=page_token
+        url='https://www.googleapis.com/drive/v3/files?'+urlencode(params)
+        req=Request(url,headers={'Accept':'application/json'})
+        try:
+            with urlopen(req,timeout=20) as response:
+                payload=json.loads(response.read().decode('utf-8'))
+        except HTTPError as exc:
+            raise DriveFolderError('Google Drive could not list this folder. Check that it is shared for public viewing and that the Drive API key is valid.') from exc
+        except URLError as exc:
+            raise DriveFolderError('Could not connect to Google Drive. Check the server connection and try again.') from exc
+        except (UnicodeDecodeError,json.JSONDecodeError) as exc:
+            raise DriveFolderError('Google Drive returned an unreadable response. Try again later.') from exc
+        files=payload.get('files')
+        if not isinstance(files,list) or any(not isinstance(item,dict) or not isinstance(item.get('name'),str) for item in files):
+            raise DriveFolderError('Google Drive returned an unexpected file listing. Check the folder link and try again.')
+        names.extend(item['name'] for item in files)
+        page_token=payload.get('nextPageToken','')
+        if not page_token:
+            return names
+    raise DriveFolderError('This folder has too many pages to scan in one check. Split the certificates into smaller folders and try again.')
 
 @app.route('/login', methods=['GET','POST'])
 def login():
@@ -253,8 +342,10 @@ def import_students():
 def student_detail(sid):
     s=db().execute('SELECT s.*,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event,(SELECT COUNT(*) FROM events e WHERE e.status="Completed") total_events FROM students s WHERE s.id=?',(sid,)).fetchone()
     if not s: return redirect(url_for('students'))
-    history=db().execute('SELECT e.name,e.event_date,a.status FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=? ORDER BY e.event_date DESC',(sid,)).fetchall()
-    return render_template('student_detail.html',student=s,history=history)
+    history=db().execute('SELECT e.name,e.event_date,e.semester,a.status,a.credit_points FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=? ORDER BY e.event_date DESC',(sid,)).fetchall()
+    semester_progress=[{'semester':db().execute('SELECT * FROM semesters WHERE id=?',(n,)).fetchone(), 'result':semester_eligibility(n,sid)} for n in range(1,5)]
+    db().commit()
+    return render_template('student_detail.html',student=s,history=history,semester_progress=semester_progress)
 
 @app.post('/students/<int:sid>/status')
 @login_required
@@ -324,25 +415,30 @@ def events():
     if request.method=='POST':
         f=request.form
         name=f.get('name','').strip()
+        semester=f.get('semester','')
         try:
             date.fromisoformat(f.get('event_date',''))
             capacity=int(f.get('max_participants') or 0) or None
         except (TypeError,ValueError):
             flash('Enter a valid date and seat capacity.','error'); return redirect(url_for('events'))
         status=f.get('status','Upcoming')
-        if (not name or (capacity is not None and capacity<1) or
+        if (semester not in ('1','2','3','4') or not name or (capacity is not None and capacity<1) or
             status not in ('Draft','Upcoming','Open','Closed','Completed','Cancelled')):
-            flash('Check the event details.','error'); return redirect(url_for('events'))
-        cur=conn.execute('''INSERT INTO events(name,description,event_date,start_time,end_time,venue,max_participants,deadline,status)
-            VALUES(?,?,?,?,?,?,?,?,?)''',(name,f.get('description'),f['event_date'],f.get('start_time'),f.get('end_time'),f.get('venue'),capacity,f.get('deadline'),status))
+            flash('Enter the event details and choose a semester from 1 to 4.','error'); return redirect(url_for('events'))
+        cur=conn.execute('''INSERT INTO events(name,description,event_date,start_time,end_time,venue,max_participants,deadline,status,semester)
+            VALUES(?,?,?,?,?,?,?,?,?,?)''',(name,f.get('description'),f['event_date'],f.get('start_time'),f.get('end_time'),f.get('venue'),capacity,f.get('deadline'),status,int(semester)))
         audit('Event created','event',cur.lastrowid,'',f['name']); conn.commit(); flash('Event created.','success'); return redirect(url_for('events'))
     q=request.args.get('q','').strip(); status=request.args.get('status','All')
+    semester=request.args.get('semester','All')
     where=[]; args=[]
     if q: where.append('(e.name LIKE ? OR e.venue LIKE ?)'); args.extend((f'%{q}%',f'%{q}%'))
     if status in ('Draft','Upcoming','Open','Closed','Completed','Cancelled'): where.append('e.status=?'); args.append(status)
+    if semester in ('1','2','3','4'): where.append('e.semester=?'); args.append(int(semester))
+    elif semester=='Unassigned': where.append('e.semester IS NULL')
+    else: semester='All'
     rows=conn.execute('SELECT e.*,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present FROM events e'+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY e.event_date DESC',args).fetchall()
     summary=conn.execute("SELECT COUNT(*) total, SUM(CASE WHEN status IN ('Upcoming','Open') THEN 1 ELSE 0 END) active, SUM(CASE WHEN status='Cancelled' THEN 1 ELSE 0 END) cancelled FROM events").fetchone()
-    return render_template('events.html',events=rows,q=q,status=status,summary=summary)
+    return render_template('events.html',events=rows,q=q,status=status,semester=semester,summary=summary)
 
 @app.get('/attendance')
 @login_required
@@ -368,17 +464,19 @@ def attendance_event_csv(eid):
     if not event:
         flash('That event is unavailable for attendance export.','error')
         return redirect(url_for('attendance_page'))
-    students=conn.execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,a.status
+    students=conn.execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,a.status,a.credit_points,e.semester
         FROM attendance a JOIN students s ON s.id=a.student_id
+        JOIN events e ON e.id=a.event_id
         JOIN event_participants p ON p.event_id=a.event_id AND p.student_id=a.student_id AND p.selection_status='Selected'
         WHERE a.event_id=? AND a.status='Present'
         ORDER BY s.name,s.register_no''',(eid,)).fetchall()
     output=io.StringIO(newline='')
     writer=csv.writer(output)
-    writer.writerow(['Event','Event Date','Register Number','Student Name','Department','Class','Section','Attendance'])
+    writer.writerow(['Event','Event Date','Semester','Register Number','Student Name','Department','Class','Section','Attendance','Credit Points'])
     for student in students:
-        values=[event['name'],event['event_date'],student['register_no'],student['name'],
-                student['department'],student['class_name'],student['section'],student['status']]
+        values=[event['name'],event['event_date'],f"Semester {student['semester']}" if student['semester'] else 'Unassigned',
+                student['register_no'],student['name'],student['department'],student['class_name'],
+                student['section'],student['status'],student['credit_points']]
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value)
                          for value in values])
     filename=f"event-{eid}-attended-students.csv"
@@ -687,8 +785,7 @@ def participation_import_confirm(batch_id):
                                  (canonical_event_name(event['name']),'Imported from YRC participation sheet',dates[event['name']],'Completed'))
                 event_ids[event['name']]=cur.lastrowid
         skipped=0
-        current_roster_by_reg={}; current_roster_by_name={}
-        current_roster_name_by_id={}
+        current_roster_by_reg={}; current_roster_by_name={}; current_roster_name_by_id={}
         for student_row in conn.execute('SELECT id,register_no,name FROM students').fetchall():
             current_roster_by_reg.setdefault(normalize_register_no(student_row['register_no']),[]).append(student_row['id'])
             current_roster_by_name.setdefault(normalize_student_name(student_row['name']),[]).append(student_row['id'])
@@ -779,6 +876,37 @@ def event_detail(eid):
         WHERE p.event_id=? ORDER BY s.name''',(eid,)).fetchall()
     available=db().execute("SELECT id,name,register_no,department,class_name,section FROM students WHERE yrc_status='Active' AND id NOT IN (SELECT student_id FROM event_participants WHERE event_id=? AND selection_status='Selected') ORDER BY name",(eid,)).fetchall()
     return render_template('event_detail.html',event=event,participants=participants,available=available)
+
+@app.post('/events/<int:eid>/semester')
+@login_required
+def event_semester_update(eid):
+    semester=request.form.get('semester','')
+    if semester not in ('','1','2','3','4'):
+        flash('Choose a valid semester.','error')
+        return redirect(url_for('event_detail',eid=eid))
+    conn=db()
+    event=conn.execute('SELECT name,semester FROM events WHERE id=?',(eid,)).fetchone()
+    if not event:
+        flash('Event not found.','error')
+        return redirect(url_for('events'))
+    new_semester=int(semester) if semester else None
+    conn.execute('UPDATE events SET semester=? WHERE id=?',(new_semester,eid))
+    audit('Event semester changed','event',eid,event['semester'] or 'Unassigned',new_semester or 'Unassigned')
+    conn.commit()
+    flash('Event semester updated. Attendance and credit history were preserved.','success')
+    return redirect(url_for('event_detail',eid=eid))
+
+@app.post('/events/<int:eid>/eligibility')
+@login_required
+def event_eligibility_update(eid):
+    value=1 if request.form.get('counts_for_eligibility')=='1' else 0
+    conn=db(); event=conn.execute('SELECT name,counts_for_eligibility FROM events WHERE id=?',(eid,)).fetchone()
+    if not event:
+        flash('Event not found.','error'); return redirect(url_for('events'))
+    conn.execute('UPDATE events SET counts_for_eligibility=? WHERE id=?',(value,eid))
+    audit('Event eligibility participation setting changed','event',eid,event['counts_for_eligibility'],value)
+    conn.commit(); flash('Activity eligibility setting saved.','success')
+    return redirect(url_for('event_detail',eid=eid))
 
 @app.post('/events/<int:eid>/delete')
 @login_required
@@ -1028,13 +1156,28 @@ def mark_all_present(eid):
 @app.get('/reports')
 @login_required
 def reports():
-    conn=db(); rows=conn.execute('SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event FROM students s WHERE s.yrc_status="Active" ORDER BY events,s.name').fetchall()
+    semester_filter=request.args.get('semester','All')
+    if semester_filter not in ('1','2','3','4','Unassigned'):
+        semester_filter='All'
+    semester_where=''
+    semester_args=[]
+    if semester_filter in ('1','2','3','4'):
+        semester_where=' AND e.semester=?'
+        semester_args.append(int(semester_filter))
+    elif semester_filter=='Unassigned':
+        semester_where=' AND e.semester IS NULL'
+    conn=db(); rows=conn.execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone,
+        (SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id
+         WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_where+''') events,
+        (SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id
+         WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_where+''') last_event
+        FROM students s WHERE s.yrc_status='Active' ORDER BY events,s.name''',semester_args*2).fetchall()
     attendance_rows=conn.execute('''SELECT s.id,s.register_no,s.name,s.department,s.class_name,s.section,
         e.name event_name,e.event_date
         FROM students s JOIN attendance a ON a.student_id=s.id AND a.status='Present'
         JOIN events e ON e.id=a.event_id
-        WHERE s.yrc_status='Active'
-        ORDER BY s.name,e.event_date,e.name''').fetchall()
+        WHERE s.yrc_status='Active' AND e.status<>'Cancelled' '''+semester_where+'''
+        ORDER BY s.name,e.event_date,e.name''',semester_args).fetchall()
     attended_by_student={}
     for attendance_row in attendance_rows:
         sid=attendance_row['id']
@@ -1047,29 +1190,273 @@ def reports():
     attended_rows=[dict(student, event_names=', '.join(student['event_names']))
                    for student in attended_by_student.values()]
     total_attendances=sum(student['events'] for student in attended_rows)
-    not_credit_eligible=[r for r in rows if r['events'] < 3]
+    below_event_threshold=[r for r in rows if r['events'] < ELIGIBILITY_EVENT_THRESHOLD]
     ineligible_by_department={}
-    for student in not_credit_eligible:
+    for student in below_event_threshold:
         department=(student['department'] or 'Unassigned').strip()
         ineligible_by_department[department]=ineligible_by_department.get(department,0)+1
     department_counts=[{'name':department,'count':ineligible_by_department.get(department,0)}
                        for department in sorted({(r['department'] or 'Unassigned').strip() for r in rows})]
-    evrows=conn.execute('SELECT e.name,e.event_date,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e ORDER BY e.event_date DESC').fetchall()
+    evrows=conn.execute('SELECT e.name,e.event_date,e.semester,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e WHERE 1=1'+semester_where+' ORDER BY e.event_date DESC',semester_args).fetchall()
+    credit_rows=conn.execute('''SELECT a.id attendance_id,a.credit_points,e.semester,e.name event_name,e.event_date,
+        s.id student_id,s.register_no,s.name,s.department
+        FROM attendance a JOIN events e ON e.id=a.event_id JOIN students s ON s.id=a.student_id
+        WHERE a.status='Present' '''+semester_where+''' ORDER BY e.semester,e.event_date,s.name''',semester_args).fetchall()
+    credit_totals={}
+    for credit_row in credit_rows:
+        student=credit_totals.setdefault(credit_row['student_id'],{
+            'register_no':credit_row['register_no'],'name':credit_row['name'],
+            'department':credit_row['department'],'events':0,'credits':0})
+        student['events']+=1
+        student['credits']+=credit_row['credit_points']
     return render_template('reports.html',rows=rows,events=evrows,
-                           not_credit_eligible=not_credit_eligible,
-                           credit_eligible=[r for r in attended_rows if r['events'] >= 3],
+                           below_event_threshold=below_event_threshold,
+                           event_threshold_met=[r for r in attended_rows if r['events'] >= ELIGIBILITY_EVENT_THRESHOLD],
                            total_attendances=total_attendances,
-                           department_counts=department_counts)
+                           department_counts=department_counts,semester_filter=semester_filter,
+                           credit_rows=credit_rows,credit_totals=sorted(credit_totals.values(),key=lambda item:item['name']))
+
+@app.post('/reports/attendance/<int:attendance_id>/credit')
+@login_required
+def update_attendance_credit(attendance_id):
+    try:
+        credit_points=int(request.form.get('credit_points',''))
+    except (TypeError,ValueError):
+        flash('Enter a whole-number credit value of zero or more.','error')
+        return redirect(url_for('reports',semester=request.form.get('semester','All')))
+    if credit_points<0:
+        flash('Credit points cannot be negative.','error')
+        return redirect(url_for('reports',semester=request.form.get('semester','All')))
+    conn=db()
+    row=conn.execute('SELECT a.credit_points,a.status,e.semester FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.id=?',(attendance_id,)).fetchone()
+    if not row or row['status']!='Present':
+        flash('Credit can only be marked for a present attendance record.','error')
+        return redirect(url_for('reports',semester=request.form.get('semester','All')))
+    semester_filter=request.form.get('semester','All')
+    if semester_filter in ('1','2','3','4') and row['semester']!=int(semester_filter):
+        flash('That attendance record is not part of the selected semester.','error')
+        return redirect(url_for('reports',semester=semester_filter))
+    if semester_filter=='Unassigned' and row['semester'] is not None:
+        flash('That attendance record is not part of the selected semester.','error')
+        return redirect(url_for('reports',semester=semester_filter))
+    conn.execute('UPDATE attendance SET credit_points=? WHERE id=?',(credit_points,attendance_id))
+    audit('Attendance credit updated','attendance',attendance_id,row['credit_points'],credit_points)
+    conn.commit()
+    flash('Credit points saved. Previous semester records remain unchanged.','success')
+    return redirect(url_for('reports',semester=request.form.get('semester','All')))
+
+@app.route('/eligibility', methods=['GET','POST'])
+@login_required
+def eligibility():
+    folder_url=''
+    results=[]
+    summary=None
+    error=''
+    semester_filter=request.values.get('semester','All')
+    if semester_filter not in ('1','2','3','4','Unassigned'):
+        semester_filter='All'
+    if request.method=='POST':
+        folder_url=request.form.get('folder_url','').strip()
+        try:
+            folder_id=extract_drive_folder_id(folder_url)
+            pdf_names=fetch_drive_pdf_names(folder_id,os.getenv('GOOGLE_DRIVE_API_KEY','').strip())
+        except DriveFolderError as exc:
+            error=str(exc)
+        else:
+            semester_condition=''
+            semester_args=[]
+            if semester_filter in ('1','2','3','4'):
+                semester_condition=' AND e.semester=?'
+                semester_args.append(int(semester_filter))
+            elif semester_filter=='Unassigned':
+                semester_condition=' AND e.semester IS NULL'
+            students=db().execute('''SELECT s.id,s.register_no,s.name,s.department,s.class_name,s.section,
+                (SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id
+                 WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_condition+''') events
+                FROM students s WHERE s.yrc_status='Active' ORDER BY s.name''',semester_args).fetchall()
+            pdf_matches={student['id']:0 for student in students}
+            unmatched_files=0
+            for filename in pdf_names:
+                matched=False
+                for student in students:
+                    roll_number=student['register_no'].strip()
+                    if roll_number and re.search(rf'(?<![A-Za-z0-9]){re.escape(roll_number)}(?![A-Za-z0-9])',filename,re.IGNORECASE):
+                        pdf_matches[student['id']]+=1
+                        matched=True
+                if not matched:
+                    unmatched_files+=1
+            for student in students:
+                certificates=pdf_matches[student['id']]
+                events=student['events']
+                results.append({
+                    'register_no':student['register_no'],
+                    'name':student['name'],
+                    'department':student['department'],
+                    'class_name':student['class_name'],
+                    'section':student['section'],
+                    'events':events,
+                    'certificates':certificates,
+                    'eligible':events>=ELIGIBILITY_EVENT_THRESHOLD and certificates>=ELIGIBILITY_CERTIFICATE_THRESHOLD,
+                })
+            eligible_count=sum(1 for student in results if student['eligible'])
+            summary={
+                'pdf_count':len(pdf_names),
+                'unmatched_files':unmatched_files,
+                'eligible_count':eligible_count,
+                'not_eligible_count':len(results)-eligible_count,
+            }
+    return render_template('eligibility.html',folder_url=folder_url,results=results,summary=summary,error=error,
+                           semester_filter=semester_filter,
+                           drive_api_configured=bool(os.getenv('GOOGLE_DRIVE_API_KEY','').strip()))
+
+def semester_eligibility(semester_id, student_id):
+    """Calculate eligibility only from verified attendance and verified required certificates."""
+    conn=db()
+    semester=conn.execute('SELECT * FROM semesters WHERE id=?',(semester_id,)).fetchone()
+    if not semester:
+        return {'status':'INCOMPLETE_RECORDS','activities':0,'minimum':0,'certificates':[],'reasons':['Semester configuration is missing.']}
+    rules=conn.execute('SELECT * FROM semester_rules WHERE semester_id=? AND enabled=1 ORDER BY id',(semester_id,)).fetchall()
+    min_rule=next((r for r in rules if r['rule_type']=='minimum_activities' and r['mandatory']),None)
+    cert_rules=[name.strip() for r in rules if r['rule_type']=='certificate' and r['mandatory'] for name in r['value'].split(',') if name.strip()]
+    if not rules:
+        return {'status':'INCOMPLETE_RECORDS','activities':0,'minimum':0,'certificates':[],'reasons':['Eligibility criteria have not been configured.']}
+    semester_filter=' AND e.semester=?'
+    activities=conn.execute("SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=? AND a.status='Present' AND e.status<>'Cancelled' AND e.counts_for_eligibility=1"+semester_filter,(student_id,semester_id)).fetchone()[0]
+    minimum=int(min_rule['value']) if min_rule else 0
+    reasons=[]
+    if min_rule and activities<minimum:
+        remaining=minimum-activities
+        reasons.append(f'Complete {remaining} more eligible activit{"y" if remaining==1 else "ies"}.')
+    cert_results=[]
+    pending=False
+    for cert_type in cert_rules:
+        cert=conn.execute('SELECT status FROM semester_certificates WHERE semester_id=? AND student_id=? AND certificate_type=?',(semester_id,student_id,cert_type)).fetchone()
+        state=cert['status'] if cert else 'Missing'
+        cert_results.append({'type':cert_type,'status':state})
+        if state!='Verified':
+            if state=='Submitted':
+                pending=True; reasons.append(f'{cert_type} certificate is awaiting verification.')
+            elif state=='Rejected': reasons.append(f'{cert_type} certificate was rejected; resubmission is required.')
+            else: reasons.append(f'{cert_type} certificate submission is pending.')
+    if not reasons:
+        reasons=['You have met all eligibility requirements.']
+    status='ELIGIBLE' if activities>=minimum and all(c['status']=='Verified' for c in cert_results) else ('PENDING_VERIFICATION' if pending else 'NOT_ELIGIBLE')
+    reason_text='; '.join(reasons)
+    conn.execute('INSERT INTO semester_eligibility_history(semester_id,student_id,status,reasons) VALUES(?,?,?,?) ON CONFLICT(semester_id,student_id) DO UPDATE SET status=excluded.status,reasons=excluded.reasons,calculated_at=CURRENT_TIMESTAMP',(semester_id,student_id,status,reason_text))
+    return {'status':status,'activities':activities,'minimum':minimum,'certificates':cert_results,'reasons':reasons}
+
+@app.get('/semesters')
+@login_required
+def semester_list():
+    semesters=db().execute('SELECT * FROM semesters ORDER BY id').fetchall()
+    return render_template('semesters.html',semesters=semesters)
+
+@app.route('/semesters/<int:semester_id>', methods=['GET','POST'])
+@login_required
+def semester_detail(semester_id):
+    conn=db(); semester=conn.execute('SELECT * FROM semesters WHERE id=?',(semester_id,)).fetchone()
+    if not semester: return 'Semester not found',404
+    if request.method=='POST':
+        action=request.form.get('action','rules')
+        if semester['locked'] and action not in ('semester','metadata'):
+            flash('This semester is finalized. Reopen it before changing eligibility or certificate records.','error')
+            return redirect(url_for('semester_detail',semester_id=semester_id))
+        if action=='rules':
+            if semester['locked']:
+                flash('Reopen this semester before changing its criteria.','error'); return redirect(url_for('semester_detail',semester_id=semester_id))
+            try:
+                minimum=int(request.form.get('minimum_activities','0'))
+                if minimum<0 or minimum>100: raise ValueError
+            except ValueError:
+                flash('Activity minimum must be a whole number from 0 to 100.','error'); return redirect(url_for('semester_detail',semester_id=semester_id))
+            cert_types=[]
+            for cert in request.form.get('certificates','').split(','):
+                cert=cert.strip()
+                if cert and cert not in cert_types: cert_types.append(cert)
+            old=[dict(r) for r in conn.execute('SELECT rule_type,value,mandatory,verification_required,enabled FROM semester_rules WHERE semester_id=?',(semester_id,)).fetchall()]
+            conn.execute('DELETE FROM semester_rules WHERE semester_id=?',(semester_id,))
+            if minimum>0: conn.execute("INSERT INTO semester_rules(semester_id,rule_type,value,mandatory) VALUES(?,'minimum_activities',?,1)",(semester_id,str(minimum)))
+            if cert_types: conn.execute("INSERT INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required) VALUES(?,'certificate',?,1,1)",(semester_id,', '.join(cert_types)))
+            audit('Semester eligibility rules changed','semester',semester_id,old,{'minimum_activities':minimum,'certificates':cert_types})
+            for student in conn.execute("SELECT id FROM students WHERE yrc_status='Active'").fetchall(): semester_eligibility(semester_id,student['id'])
+            conn.commit(); flash('Criteria saved and eligibility recalculated.','success')
+        elif action=='semester':
+            locked=1-int(semester['locked'])
+            conn.execute('UPDATE semesters SET locked=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(locked,semester_id))
+            audit('Semester finalized' if locked else 'Semester reopened','semester',semester_id,semester['locked'],locked)
+            conn.commit(); flash('Semester finalized.' if locked else 'Semester reopened.','success')
+        elif action=='metadata':
+            name=request.form.get('name','').strip(); year=request.form.get('academic_year','').strip(); active=1 if request.form.get('active')=='1' else 0
+            if not name or len(name)>80 or len(year)>30:
+                flash('Enter a semester name and a valid academic year.','error')
+            else:
+                conn.execute('UPDATE semesters SET name=?,academic_year=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(name,year,active,semester_id))
+                audit('Semester settings changed','semester',semester_id,{'name':semester['name'],'academic_year':semester['academic_year'],'active':semester['active']},{'name':name,'academic_year':year,'active':active})
+                conn.commit(); flash('Semester settings saved.','success')
+        elif action=='certificate':
+            sid=request.form.get('student_id',''); cert_type=request.form.get('certificate_type','').strip(); reference=request.form.get('reference','').strip()
+            student=conn.execute('SELECT id FROM students WHERE id=?',(sid,)).fetchone()
+            if not student or not cert_type:
+                flash('Choose a student and enter a certificate type.','error')
+            else:
+                conn.execute("INSERT INTO semester_certificates(semester_id,student_id,certificate_type,reference,status) VALUES(?,?,?,?,'Submitted') ON CONFLICT(semester_id,student_id,certificate_type) DO UPDATE SET reference=excluded.reference,status='Submitted',verified_by=NULL,verified_at=NULL",(semester_id,sid,cert_type,reference))
+                audit('Certificate submission recorded','semester_certificate',sid,'','Submitted '+cert_type)
+                semester_eligibility(semester_id,sid); conn.commit(); flash('Certificate submission recorded as awaiting verification.','success')
+        elif action=='verify':
+            cert_id=request.form.get('certificate_id'); decision=request.form.get('decision')
+            if decision not in ('Verified','Rejected'):
+                flash('Choose a valid verification decision.','error')
+            else:
+                cert=conn.execute('SELECT * FROM semester_certificates WHERE id=? AND semester_id=?',(cert_id,semester_id)).fetchone()
+                if cert:
+                    conn.execute('UPDATE semester_certificates SET status=?,verified_by=?,verified_at=CURRENT_TIMESTAMP WHERE id=?',(decision,session.get('admin_id'),cert_id))
+                    audit('Certificate verification decision','semester_certificate',cert_id,cert['status'],decision)
+                    semester_eligibility(semester_id,cert['student_id']); conn.commit(); flash('Certificate decision saved.','success')
+    rules=conn.execute('SELECT * FROM semester_rules WHERE semester_id=? AND enabled=1 ORDER BY id',(semester_id,)).fetchall()
+    cert_types=', '.join(r['value'] for r in rules if r['rule_type']=='certificate')
+    min_rule=next((r for r in rules if r['rule_type']=='minimum_activities'),None)
+    students=conn.execute("SELECT id,register_no,name,department,class_name,section FROM students WHERE yrc_status='Active' ORDER BY name").fetchall()
+    rows=[]
+    for student in students:
+        result=semester_eligibility(semester_id,student['id'])
+        rows.append({'student':student,'result':result})
+    conn.commit()
+    certificates=conn.execute('SELECT c.*,s.name,s.register_no FROM semester_certificates c JOIN students s ON s.id=c.student_id WHERE c.semester_id=? ORDER BY c.created_at DESC',(semester_id,)).fetchall()
+    counts={key:sum(1 for row in rows if row['result']['status']==key) for key in ('ELIGIBLE','NOT_ELIGIBLE','PENDING_VERIFICATION','INCOMPLETE_RECORDS')}
+    return render_template('semester_detail.html',semester=semester,rows=rows,students=students,certificates=certificates,minimum=min_rule['value'] if min_rule else '',cert_types=cert_types,counts=counts,configured=bool(rules))
+
+@app.get('/semesters/<int:semester_id>/report.csv')
+@login_required
+def semester_report_csv(semester_id):
+    semester=db().execute('SELECT name FROM semesters WHERE id=?',(semester_id,)).fetchone()
+    if not semester: return 'Semester not found',404
+    output=io.StringIO(); writer=csv.writer(output)
+    writer.writerow(['Semester','Register number','Student','Department','Class','Activities completed','Activities required','Certificates','Status','Remaining requirements'])
+    students=db().execute("SELECT id,register_no,name,department,class_name FROM students WHERE yrc_status='Active' ORDER BY name").fetchall()
+    for student in students:
+        result=semester_eligibility(semester_id,student['id'])
+        certs='; '.join(f"{c['type']}: {c['status']}" for c in result['certificates'])
+        writer.writerow([semester['name'],student['register_no'],student['name'],student['department'],student['class_name'],result['activities'],result['minimum'],certs,result['status'],'; '.join(result['reasons'])])
+    db().commit()
+    return Response('\ufeff'+output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename="semester-{semester_id}-eligibility.csv"'})
 
 @app.get('/reports/attended-students.csv')
 @login_required
 def attended_students_csv():
+    semester_filter=request.args.get('semester','All')
+    semester_where=''
+    semester_args=[]
+    if semester_filter in ('1','2','3','4'):
+        semester_where=' AND e.semester=?'
+        semester_args.append(int(semester_filter))
+    elif semester_filter=='Unassigned':
+        semester_where=' AND e.semester IS NULL'
     rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,
         s.id student_id,e.name event_name,e.event_date
         FROM students s JOIN attendance a ON a.student_id=s.id AND a.status='Present'
         JOIN events e ON e.id=a.event_id
-        WHERE s.yrc_status='Active'
-        ORDER BY s.name,e.event_date,e.name''').fetchall()
+        WHERE s.yrc_status='Active' AND e.status<>'Cancelled' '''+semester_where+'''
+        ORDER BY s.name,e.event_date,e.name''',semester_args).fetchall()
     attended_by_student={}
     for row in rows:
         student=attended_by_student.setdefault(row['student_id'],{
@@ -1084,7 +1471,8 @@ def attended_students_csv():
         values=[student['register_no'],student['name'],student['department'],student['class_name'],
                 student['section'],'; '.join(student['events']),len(student['events'])]
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
-    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=students-eligible-for-credits.csv'})
+    filename=f'yrc-student-event-attendance-semester-{semester_filter}.csv' if semester_filter in ('1','2','3','4') else 'yrc-student-event-attendance.csv'
+    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename={filename}'})
 
 @app.get('/reports/students.csv')
 @login_required
@@ -1102,16 +1490,26 @@ def students_csv():
 @login_required
 def priority_students_csv():
     import csv, io
+    semester_filter=request.args.get('semester','All')
+    semester_where=''
+    semester_args=[]
+    if semester_filter in ('1','2','3','4'):
+        semester_where=' AND e.semester=?'
+        semester_args.append(int(semester_filter))
+    elif semester_filter=='Unassigned':
+        semester_where=' AND e.semester IS NULL'
     rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone
         FROM students s WHERE s.yrc_status='Active'
-        AND (SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status='Present') < 3
-        ORDER BY s.department,s.class_name,s.name''').fetchall()
+        AND (SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id
+             WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_where+''') < 3
+        ORDER BY s.department,s.class_name,s.name''',semester_args).fetchall()
     buf=io.StringIO(newline=''); writer=csv.writer(buf)
     writer.writerow(['Register No','Name','Department','Class','Section','Email','Phone','Priority'])
     for row in rows:
-        values=[row['register_no'],row['name'],row['department'],row['class_name'],row['section'],row['email'],row['phone'],'Not eligible - fewer than 3 events attended']
+        values=[row['register_no'],row['name'],row['department'],row['class_name'],row['section'],row['email'],row['phone'],'Below 3-event attendance threshold']
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
-    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=students-not-eligible-for-credits.csv'})
+    filename=f'yrc-below-event-threshold-semester-{semester_filter}.csv' if semester_filter in ('1','2','3','4') else 'yrc-below-event-threshold.csv'
+    return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename={filename}'})
 
 @app.get('/settings')
 @login_required

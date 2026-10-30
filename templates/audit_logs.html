@@ -1,0 +1,4 @@
+{% extends 'base.html' %}
+{% block title %}Audit Log{% endblock %}
+{% block crumb %}AUDIT LOG{% endblock %}
+{% block content %}<div class="page-heading"><div><div class="eyebrow">ADMINISTRATIVE ACCOUNTABILITY</div><h1>Audit log</h1><p class="subhead">Read-only history of changes recorded by the application.</p></div></div><section class="panel"><div class="table-scroll"><table><thead><tr><th>TIME</th><th>ADMIN</th><th>ACTION</th><th>RECORD</th><th>PREVIOUS VALUE</th><th>NEW VALUE</th></tr></thead><tbody>{% for row in rows %}<tr><td>{{ row.created_at }}</td><td>{{ row.username or 'System / unknown' }}</td><td>{{ row.action }}</td><td>{{ row.entity_type }} · {{ row.entity_id or '—' }}</td><td><code>{{ row.old_value|truncate(220) }}</code></td><td><code>{{ row.new_value|truncate(220) }}</code></td></tr>{% else %}<tr><td colspan="6" class="empty-cell">No audit entries are recorded.</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}

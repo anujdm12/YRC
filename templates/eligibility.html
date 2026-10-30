@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}Eligibility check{% endblock %}
+{% block crumb %}ELIGIBILITY CHECK{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">VOLUNTEER REQUIREMENTS</div>
+    <h1>Eligibility check</h1>
+    <p class="subhead">Eligible students must have attended at least 3 events and earned at least 3 certificates in the selected period.</p>
+  </div>
+  <a class="btn secondary" href="{{ url_for('reports') }}">Attendance reports</a>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Check certificate folder</h2>
+      <p>Choose a semester and paste its public Google Drive folder link. PDFs are matched by roll number in the filename.</p>
+    </div>
+  </div>
+  <form method="post" class="filter-bar">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <label>Semester
+      <select name="semester">
+        <option value="All" {{'selected' if semester_filter=='All'}}>All semesters</option>
+        {% for semester_number in range(1,5) %}<option value="{{semester_number}}" {{'selected' if semester_filter==(semester_number|string)}}>Semester {{semester_number}}</option>{% endfor %}
+        <option value="Unassigned" {{'selected' if semester_filter=='Unassigned'}}>Historical / unassigned</option>
+      </select>
+    </label>
+    <label class="search-field" style="max-width:none">
+      <span>Drive</span>
+      <input type="url" name="folder_url" value="{{ folder_url }}" placeholder="https://drive.google.com/drive/folders/…" required>
+    </label>
+    <button class="btn primary" type="submit">Check eligibility</button>
+  </form>
+  <p class="subhead" style="margin-top:12px">For a semester-specific check, use the Drive folder containing certificates for that semester. “All semesters” counts events and certificates across the full history.</p>
+  <p class="subhead" style="margin-top:12px">Only PDF files are counted. Include each student's exact roll number as a separate filename token, for example <code>26BCAC63_First_Aid.pdf</code>. The app reads file names only, not certificate contents.</p>
+  {% if not drive_api_configured %}<p class="subhead" role="status" style="margin-top:10px">Server setup required: configure <code>GOOGLE_DRIVE_API_KEY</code> and enable the Google Drive API before scanning.</p>{% endif %}
+  {% if error %}<div class="toast error" role="alert" style="margin-top:14px">{{ error }}</div>{% endif %}
+</section>
+
+{% if summary %}
+<div class="stats-grid">
+  <article class="stat-card"><div class="stat-top"><span>Eligible students</span></div><strong>{{ summary.eligible_count }}</strong><small>Meet both requirements</small></article>
+  <article class="stat-card"><div class="stat-top"><span>Not eligible</span></div><strong>{{ summary.not_eligible_count }}</strong><small>Below one or both thresholds</small></article>
+  <article class="stat-card"><div class="stat-top"><span>PDF certificates scanned</span></div><strong>{{ summary.pdf_count }}</strong><small>Found in this Drive folder</small></article>
+  <article class="stat-card"><div class="stat-top"><span>Files not matched</span></div><strong>{{ summary.unmatched_files }}</strong><small>No active roster roll number in filename</small></article>
+</div>
+<section class="panel">
+  <div class="panel-head">
+    <div><h2>Student eligibility results</h2><p>Checked against the active roster and the folder provided above.</p></div>
+    <span class="count-pill">{{ results|length }} students</span>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>ROLL NUMBER</th><th>STUDENT</th><th>DEPARTMENT</th><th>EVENTS ATTENDED</th><th>CERTIFICATES</th><th>RESULT</th></tr></thead>
+      <tbody>
+        {% for student in results %}
+        <tr>
+          <td>{{ student.register_no }}</td>
+          <td class="table-title">{{ student.name }}</td>
+          <td>{{ student.department }}</td>
+          <td>{{ student.events }} / 3</td>
+          <td>{{ student.certificates }} / 3</td>
+          <td><span class="badge {{ 'present' if student.eligible else 'absent' }}">{{ 'Eligible' if student.eligible else 'Not eligible' }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-cell">No active students are in the roster.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

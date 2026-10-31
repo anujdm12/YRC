@@ -1326,11 +1326,21 @@ def semester_eligibility_many(semester_id, student_ids, academic_year=None, pers
         reason_text='; '.join(result['reasons'])
         history.append((semester_id,student_id,result['status'],reason_text))
     if persist:
+        # Read existing states in one round trip. Looking up each student
+        # individually makes a semester recalculation take O(students) DB
+        # round trips (and is repeated for every academic year).
+        previous_rows=conn.execute(
+            'SELECT student_id,status,reasons FROM semester_eligibility_history WHERE semester_id=?',
+            (semester_id,)
+        ).fetchall()
+        previous_by_student={row['student_id']:row for row in previous_rows}
+        changes=[]
         for semester_key,student_id,new_status,new_reasons in history:
-            previous=conn.execute('SELECT status,reasons FROM semester_eligibility_history WHERE semester_id=? AND student_id=?',(semester_key,student_id)).fetchone()
+            previous=previous_by_student.get(student_id)
             if previous and (previous['status']!=new_status or previous['reasons']!=new_reasons):
-                conn.execute('INSERT INTO semester_eligibility_change_log(semester_id,student_id,previous_status,new_status,previous_reasons,new_reasons,change_reason) VALUES(?,?,?,?,?,?,?)',
-                             (semester_key,student_id,previous['status'],new_status,previous['reasons'],new_reasons,change_reason))
+                changes.append((semester_key,student_id,previous['status'],new_status,previous['reasons'],new_reasons,change_reason))
+        if changes:
+            conn.executemany('INSERT INTO semester_eligibility_change_log(semester_id,student_id,previous_status,new_status,previous_reasons,new_reasons,change_reason) VALUES(?,?,?,?,?,?,?)',changes)
         conn.executemany('INSERT INTO semester_eligibility_history(semester_id,student_id,status,reasons) VALUES(?,?,?,?) ON CONFLICT(semester_id,student_id) DO UPDATE SET status=excluded.status,reasons=excluded.reasons,calculated_at=CURRENT_TIMESTAMP',history)
         result_rows=[(semester_id,academic_year or '',student_id,result['status'],'; '.join(result['reasons'])) for student_id,result in results.items()]
         conn.executemany('INSERT INTO semester_eligibility_results(semester_id,academic_year,student_id,status,reasons) VALUES(?,?,?,?,?) ON CONFLICT(semester_id,academic_year,student_id) DO UPDATE SET status=excluded.status,reasons=excluded.reasons,calculated_at=CURRENT_TIMESTAMP',result_rows)

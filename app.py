@@ -75,6 +75,12 @@ def init_db():
         conn.execute('INSERT OR IGNORE INTO semesters(id,name) VALUES(?,?)', (semester_number, f'Semester {semester_number}'))
     conn.execute("INSERT OR IGNORE INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required) VALUES(1,'minimum_activities','2',1,0)")
     conn.execute("INSERT OR IGNORE INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required) VALUES(1,'certificate','ICRC',1,1)")
+    for rule in conn.execute("SELECT id,value FROM semester_rules WHERE rule_type='certificate'").fetchall():
+        try:
+            int(rule['value'])
+        except (TypeError,ValueError):
+            legacy_count=len([name for name in rule['value'].split(',') if name.strip()])
+            conn.execute('UPDATE semester_rules SET value=? WHERE id=?',(str(legacy_count),rule['id']))
     student_columns = {row[1] for row in conn.execute('PRAGMA table_info(students)')}
     if 'class_name' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN class_name TEXT NOT NULL DEFAULT ''")
@@ -1414,7 +1420,9 @@ def semester_eligibility_many(semester_id, student_ids, academic_year=None, pers
     semester=conn.execute('SELECT id FROM semesters WHERE id=?',(semester_id,)).fetchone()
     rules=rules_override if rules_override is not None else (conn.execute('SELECT * FROM semester_rules WHERE semester_id=? AND enabled=1 ORDER BY id',(semester_id,)).fetchall() if semester else [])
     min_rule=next((r for r in rules if r['rule_type']=='minimum_activities' and r['mandatory']),None)
-    cert_rules=[name.strip() for r in rules if r['rule_type']=='certificate' and r['mandatory'] for name in r['value'].split(',') if name.strip()]
+    cert_rule=next((r for r in rules if r['rule_type']=='certificate' and r['mandatory']),None)
+    try: minimum_certificates=max(0,int(cert_rule['value'])) if cert_rule else 0
+    except (TypeError,ValueError): minimum_certificates=0
     minimum=int(min_rule['value']) if min_rule else 0
     placeholders=','.join('?' for _ in ids)
     activity_sql="SELECT a.student_id,COUNT(DISTINCT a.event_id) AS activities FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.status='Present' AND e.status='Completed' AND e.counts_for_eligibility=1 AND e.semester=?"
@@ -1460,16 +1468,14 @@ def semester_eligibility_many(semester_id, student_ids, academic_year=None, pers
             if min_rule and not activity_ok:
                 remaining=minimum-count
                 reasons.append(f'Complete {remaining} more eligible activit{"y" if remaining==1 else "ies"}.')
-            cert_results=[]; pending=False
-            for cert_type in cert_rules:
-                state=cert_status.get((student_id,cert_type),'Missing')
-                cert_results.append({'type':cert_type,'status':state})
-                if state=='Submitted':
-                    pending=True; reasons.append(f'{cert_type} certificate is awaiting verification.')
-                elif state=='Rejected': reasons.append(f'{cert_type} certificate was rejected; resubmission is required.')
-                elif state!='Verified': reasons.append(f'{cert_type} certificate submission is pending.')
-            cert_ok=bool(cert_results) and all(c['status']=='Verified' for c in cert_results)
-            if cert_rules:
+            cert_results=[{'type':kind,'status':state} for (sid,kind),state in cert_status.items() if sid==student_id]
+            verified_count=sum(1 for cert in cert_results if cert['status']=='Verified')
+            pending_count=sum(1 for cert in cert_results if cert['status']=='Submitted')
+            pending=minimum_certificates>verified_count and pending_count>0
+            cert_ok=verified_count>=minimum_certificates
+            if minimum_certificates and verified_count<minimum_certificates:
+                reasons.append(f'Have {minimum_certificates-verified_count} more certificate(s) verified ({verified_count} of {minimum_certificates}).')
+            if minimum_certificates:
                 conditions.append(cert_ok)
             operator=(rules[0]['condition_operator'] or 'AND').upper()
             eligible=bool(conditions) and (any(conditions) if operator=='OR' else all(conditions))
@@ -1482,7 +1488,7 @@ def semester_eligibility_many(semester_id, student_ids, academic_year=None, pers
             if not reasons:
                 reasons=['You have met all eligibility requirements.']
             status='ELIGIBLE' if eligible else ('INCOMPLETE_RECORDS' if unresolved_could_change else ('PENDING_VERIFICATION' if pending else 'NOT_ELIGIBLE'))
-            result={'status':status,'activities':count,'unassigned_activities':unresolved_count,'minimum':minimum,'certificates':cert_results,'reasons':reasons}
+            result={'status':status,'activities':count,'unassigned_activities':unresolved_count,'minimum':minimum,'certificates':cert_results,'verified_certificates':verified_count,'minimum_certificates':minimum_certificates,'reasons':reasons}
         results[student_id]=result
         reason_text='; '.join(result['reasons'])
         history.append((semester_id,student_id,result['status'],reason_text))
@@ -1966,22 +1972,19 @@ def semester_criteria_preview(semester_id):
     if semester['locked']: return jsonify({'error':'Reopen this semester before previewing criteria changes.'}),409
     try:
         minimum=int(request.form.get('minimum_activities','0'))
-        if minimum<0 or minimum>100: raise ValueError
-    except ValueError: return jsonify({'error':'Activity minimum must be between 0 and 100.'}),400
+        minimum_certificates=int(request.form.get('minimum_certificates','0'))
+        if minimum<0 or minimum>100 or minimum_certificates<0 or minimum_certificates>100: raise ValueError
+    except ValueError: return jsonify({'error':'Activity and certificate minimums must be between 0 and 100.'}),400
     operator=request.form.get('condition_operator','AND').upper()
     if operator not in ('AND','OR'): return jsonify({'error':'Choose AND or OR.'}),400
-    certificates=[]
-    for value in request.form.get('certificates','').split(','):
-        name=value.strip()[:120]
-        if name and name not in certificates: certificates.append(name)
     simulated=[]
     if minimum>0: simulated.append({'rule_type':'minimum_activities','value':str(minimum),'mandatory':1,'condition_operator':operator})
-    if certificates: simulated.append({'rule_type':'certificate','value':', '.join(certificates),'mandatory':1,'condition_operator':operator})
+    if minimum_certificates: simulated.append({'rule_type':'certificate','value':str(minimum_certificates),'mandatory':1,'condition_operator':operator})
     student_ids=[r['id'] for r in conn.execute("SELECT id FROM students WHERE yrc_status='Active'").fetchall()]
     results=semester_eligibility_many(semester_id,student_ids,semester['academic_year'] or None,persist=False,rules_override=simulated)
     statuses=('ELIGIBLE','NOT_ELIGIBLE','PENDING_VERIFICATION','INCOMPLETE_RECORDS','CRITERIA_NOT_CONFIGURED')
     counts={status:sum(1 for result in results.values() if result['status']==status) for status in statuses}
-    return jsonify({'total':len(results),'counts':counts,'rules':{'minimum_activities':minimum,'certificates':certificates,'operator':operator}})
+    return jsonify({'total':len(results),'counts':counts,'rules':{'minimum_activities':minimum,'minimum_certificates':minimum_certificates,'operator':operator}})
 
 @app.get('/semester-reports/consolidated')
 @login_required
@@ -2011,13 +2014,10 @@ def semester_detail(semester_id):
                 flash('Reopen this semester before changing its criteria.','error'); return redirect(url_for('semester_detail',semester_id=semester_id))
             try:
                 minimum=int(request.form.get('minimum_activities','0'))
-                if minimum<0 or minimum>100: raise ValueError
+                minimum_certificates=int(request.form.get('minimum_certificates','0'))
+                if minimum<0 or minimum>100 or minimum_certificates<0 or minimum_certificates>100: raise ValueError
             except ValueError:
-                flash('Activity minimum must be a whole number from 0 to 100.','error'); return redirect(url_for('semester_detail',semester_id=semester_id))
-            cert_types=[]
-            for cert in request.form.get('certificates','').split(','):
-                cert=cert.strip()
-                if cert and cert not in cert_types: cert_types.append(cert)
+                flash('Activity and certificate minimums must be whole numbers from 0 to 100.','error'); return redirect(url_for('semester_detail',semester_id=semester_id))
             operator=request.form.get('condition_operator','AND').upper()
             if operator not in ('AND','OR'):
                 flash('Choose AND or OR for combining enabled criteria.','error'); return redirect(url_for('semester_detail',semester_id=semester_id))
@@ -2026,12 +2026,12 @@ def semester_detail(semester_id):
                 conn.execute("INSERT INTO semester_rules(semester_id,rule_type,value,mandatory,enabled,condition_operator) VALUES(?,'minimum_activities',?,1,1,?) ON CONFLICT(semester_id,rule_type) DO UPDATE SET value=excluded.value,mandatory=1,enabled=1,condition_operator=excluded.condition_operator",(semester_id,str(minimum),operator))
             else:
                 conn.execute("UPDATE semester_rules SET value='0',mandatory=0,enabled=0,condition_operator=? WHERE semester_id=? AND rule_type='minimum_activities'",(operator,semester_id))
-            if cert_types:
-                conn.execute("INSERT INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required,enabled,condition_operator) VALUES(?,'certificate',?,1,1,1,?) ON CONFLICT(semester_id,rule_type) DO UPDATE SET value=excluded.value,mandatory=1,verification_required=1,enabled=1,condition_operator=excluded.condition_operator",(semester_id,', '.join(cert_types),operator))
+            if minimum_certificates:
+                conn.execute("INSERT INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required,enabled,condition_operator) VALUES(?,'certificate',?,1,1,1,?) ON CONFLICT(semester_id,rule_type) DO UPDATE SET value=excluded.value,mandatory=1,verification_required=1,enabled=1,condition_operator=excluded.condition_operator",(semester_id,str(minimum_certificates),operator))
             else:
                 conn.execute("UPDATE semester_rules SET mandatory=0,enabled=0,condition_operator=? WHERE semester_id=? AND rule_type='certificate'",(operator,semester_id))
             conn.execute('UPDATE semester_rules SET condition_operator=? WHERE semester_id=?',(operator,semester_id))
-            audit('Semester eligibility rules changed','semester',semester_id,old,{'minimum_activities':minimum,'certificates':cert_types,'condition_operator':operator})
+            audit('Semester eligibility rules changed','semester',semester_id,old,{'minimum_activities':minimum,'minimum_certificates':minimum_certificates,'condition_operator':operator})
             active_ids=[student['id'] for student in conn.execute("SELECT id FROM students WHERE yrc_status='Active'").fetchall()]
             semester_eligibility_many(semester_id,active_ids,change_reason='Semester eligibility criteria changed')
             rule_years=conn.execute("SELECT DISTINCT academic_year FROM events WHERE semester=? AND academic_year IS NOT NULL AND academic_year<>''",(semester_id,)).fetchall()
@@ -2074,7 +2074,7 @@ def semester_detail(semester_id):
                     audit('Certificate verification decision','semester_certificate',cert_id,cert['status'],decision)
                     semester_eligibility(semester_id,cert['student_id']); conn.commit(); flash('Certificate decision saved.','success')
     rules=conn.execute('SELECT * FROM semester_rules WHERE semester_id=? AND enabled=1 ORDER BY id',(semester_id,)).fetchall()
-    cert_types=', '.join(r['value'] for r in rules if r['rule_type']=='certificate')
+    cert_rule=next((r for r in rules if r['rule_type']=='certificate'),None)
     min_rule=next((r for r in rules if r['rule_type']=='minimum_activities'),None)
     condition_operator=rules[0]['condition_operator'] if rules else 'AND'
     academic_year=request.values.get('academic_year','').strip()
@@ -2122,7 +2122,7 @@ def semester_detail(semester_id):
     rows=rows[(page-1)*per_page:page*per_page]
     conn.commit()
     certificates=conn.execute('SELECT c.*,s.name,s.register_no FROM semester_certificate_records c JOIN students s ON s.id=c.student_id WHERE c.semester_id=? ORDER BY c.created_at DESC',(semester_id,)).fetchall()
-    return render_template('semester_detail.html',semester=semester,rows=rows,students=all_students,certificates=certificates,minimum=min_rule['value'] if min_rule else '',cert_types=cert_types,condition_operator=condition_operator,counts=counts,configured=bool(rules),semester_events=semester_events,academic_year=academic_year,academic_years=academic_years,departments=departments,classes=classes,department_filter=department,class_filter=class_name,search=search,status_filter=status_filter,cert_filter=cert_filter,event_filter=event_filter,page=page,pages=pages,total_filtered=total_filtered,total_students=len(all_students),total_events=len(semester_events))
+    return render_template('semester_detail.html',semester=semester,rows=rows,students=all_students,certificates=certificates,minimum=min_rule['value'] if min_rule else '',minimum_certificates=cert_rule['value'] if cert_rule else '0',cert_types='',condition_operator=condition_operator,counts=counts,configured=bool(rules),semester_events=semester_events,academic_year=academic_year,academic_years=academic_years,departments=departments,classes=classes,department_filter=department,class_filter=class_name,search=search,status_filter=status_filter,cert_filter=cert_filter,event_filter=event_filter,page=page,pages=pages,total_filtered=total_filtered,total_students=len(all_students),total_events=len(semester_events))
 
 @app.get('/semesters/<int:semester_id>/report.csv')
 @login_required

@@ -14,11 +14,11 @@
 <section class="panel">
   <div class="panel-head">
     <div>
-      <h2>Check certificate folder</h2>
-      <p>Choose a semester and paste its public Google Drive folder link. PDFs are matched by roll number in the filename.</p>
+      <h2>Evaluate certificate counts</h2>
+      <p>Upload the certificate-count CSV. The evaluator uses the completed certificate count for each registration number.</p>
     </div>
   </div>
-  <form method="post" class="filter-bar">
+  <form method="post" enctype="multipart/form-data" class="filter-bar">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <label>Semester
       <select name="semester">
@@ -27,15 +27,12 @@
         <option value="Unassigned" {{'selected' if semester_filter=='Unassigned'}}>Historical / unassigned</option>
       </select>
     </label>
-    <label class="search-field" style="max-width:none">
-      <span>Drive</span>
-      <input type="url" name="folder_url" value="{{ folder_url }}" placeholder="https://drive.google.com/drive/folders/…" required>
+    <label class="search-field" style="max-width:none">Certificate count CSV
+      <input type="file" name="file" accept=".csv" required>
     </label>
     <button class="btn primary" type="submit">Check eligibility</button>
   </form>
-  <p class="subhead" style="margin-top:12px">For a semester-specific check, use the Drive folder containing certificates for that semester. “All semesters” counts events and certificates across the full history.</p>
-  <p class="subhead" style="margin-top:12px">Only PDF files are counted. Include each student's exact roll number as a separate filename token, for example <code>26BCAC63_First_Aid.pdf</code>. The app reads file names only, not certificate contents.</p>
-  {% if not drive_api_configured %}<p class="subhead" role="status" style="margin-top:10px">Server setup required: configure <code>GOOGLE_DRIVE_API_KEY</code> and enable the Google Drive API before scanning.</p>{% endif %}
+  <p class="subhead" style="margin-top:12px">Certificate type is ignored. Blank count cells count as zero. Event attendance is still checked from the selected period.</p>
   {% if error %}<div class="toast error" role="alert" style="margin-top:14px">{{ error }}</div>{% endif %}
 </section>
 
@@ -43,12 +40,12 @@
 <div class="stats-grid">
   <article class="stat-card"><div class="stat-top"><span>Eligible students</span></div><strong>{{ summary.eligible_count }}</strong><small>Meet both requirements</small></article>
   <article class="stat-card"><div class="stat-top"><span>Not eligible</span></div><strong>{{ summary.not_eligible_count }}</strong><small>Below one or both thresholds</small></article>
-  <article class="stat-card"><div class="stat-top"><span>PDF certificates scanned</span></div><strong>{{ summary.pdf_count }}</strong><small>Found in this Drive folder</small></article>
-  <article class="stat-card"><div class="stat-top"><span>Files not matched</span></div><strong>{{ summary.unmatched_files }}</strong><small>No active roster roll number in filename</small></article>
+  <article class="stat-card"><div class="stat-top"><span>CSV student rows</span></div><strong>{{ summary.csv_count }}</strong><small>Rows with registration numbers</small></article>
+  <article class="stat-card"><div class="stat-top"><span>Rows not matched</span></div><strong>{{ summary.unmatched_rows }}</strong><small>Registration numbers not in active roster</small></article>
 </div>
 <section class="panel">
   <div class="panel-head">
-    <div><h2>Student eligibility results</h2><p>Checked against the active roster and the folder provided above.</p></div>
+    <div><h2>Student eligibility results</h2><p>Checked against the active roster and certificate counts in the uploaded CSV.</p></div>
     <span class="count-pill">{{ results|length }} students</span>
   </div>
   <div class="table-scroll">

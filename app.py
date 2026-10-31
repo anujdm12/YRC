@@ -1350,7 +1350,7 @@ def update_attendance_credit(attendance_id):
 @app.route('/eligibility', methods=['GET','POST'])
 @login_required
 def eligibility():
-    folder_url=''
+    csv_filename=''
     results=[]
     summary=None
     error=''
@@ -1358,58 +1358,72 @@ def eligibility():
     if semester_filter not in ('1','2','3','4','Unassigned'):
         semester_filter='All'
     if request.method=='POST':
-        folder_url=request.form.get('folder_url','').strip()
-        try:
-            folder_id=extract_drive_folder_id(folder_url)
-            pdf_names=fetch_drive_pdf_names(folder_id,os.getenv('GOOGLE_DRIVE_API_KEY','').strip())
-        except DriveFolderError as exc:
-            error=str(exc)
+        upload=request.files.get('file')
+        csv_filename=upload.filename if upload else ''
+        if not upload or not csv_filename or not csv_filename.lower().endswith('.csv'):
+            error='Choose the certificate-count CSV file.'
         else:
-            semester_condition=''
-            semester_args=[]
-            if semester_filter in ('1','2','3','4'):
-                semester_condition=' AND e.semester=?'
-                semester_args.append(int(semester_filter))
-            elif semester_filter=='Unassigned':
-                semester_condition=' AND e.semester IS NULL'
-            students=db().execute('''SELECT s.id,s.register_no,s.name,s.department,s.class_name,s.section,
-                (SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id
-                 WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_condition+''') events
-                FROM students s WHERE s.yrc_status='Active' ORDER BY s.name''',semester_args).fetchall()
-            pdf_matches={student['id']:0 for student in students}
-            unmatched_files=0
-            for filename in pdf_names:
-                matched=False
+            try:
+                text=upload.stream.read().decode('utf-8-sig')
+                reader=csv.DictReader(io.StringIO(text))
+                def normalized_header(value):
+                    return re.sub(r'[^a-z0-9]+','',str(value or '').lower())
+                headers={normalized_header(name):name for name in (reader.fieldnames or [])}
+                register_header=next((headers[key] for key in ('regno','registerno','rollno','rollnumber') if key in headers),None)
+                count_header=next((name for key,name in headers.items() if ('certificate' in key or 'cretificate' in key) and ('count' in key or 'completed' in key)),None)
+                if not register_header or not count_header:
+                    raise ValueError('CSV must include a registration number column and a certificate count column.')
+                certificate_counts={}
+                for row in reader:
+                    register_no=(row.get(register_header) or '').strip().upper()
+                    raw_count=(row.get(count_header) or '').strip()
+                    if not register_no:
+                        continue
+                    try:
+                        count=int(raw_count) if raw_count else 0
+                        if count < 0: raise ValueError
+                    except ValueError:
+                        raise ValueError(f'Certificate count for {register_no} must be a non-negative whole number.')
+                    certificate_counts[register_no]=count
+            except (UnicodeDecodeError, csv.Error, ValueError) as exc:
+                error=str(exc) if str(exc) else 'The CSV could not be read. Save it as UTF-8 and try again.'
+            else:
+                semester_condition=''
+                semester_args=[]
+                if semester_filter in ('1','2','3','4'):
+                    semester_condition=' AND e.semester=?'
+                    semester_args.append(int(semester_filter))
+                elif semester_filter=='Unassigned':
+                    semester_condition=' AND e.semester IS NULL'
+                students=db().execute('''SELECT s.id,s.register_no,s.name,s.department,s.class_name,s.section,
+                    (SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id
+                     WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_condition+''') events
+                    FROM students s WHERE s.yrc_status='Active' ORDER BY s.name''',semester_args).fetchall()
+                matched_registers={student['register_no'].strip().upper() for student in students}
+                unmatched_rows=sum(1 for register_no in certificate_counts if register_no not in matched_registers)
                 for student in students:
-                    roll_number=student['register_no'].strip()
-                    if roll_number and re.search(rf'(?<![A-Za-z0-9]){re.escape(roll_number)}(?![A-Za-z0-9])',filename,re.IGNORECASE):
-                        pdf_matches[student['id']]+=1
-                        matched=True
-                if not matched:
-                    unmatched_files+=1
-            for student in students:
-                certificates=pdf_matches[student['id']]
-                events=student['events']
-                results.append({
-                    'register_no':student['register_no'],
-                    'name':student['name'],
-                    'department':student['department'],
-                    'class_name':student['class_name'],
-                    'section':student['section'],
-                    'events':events,
-                    'certificates':certificates,
-                    'eligible':events>=ELIGIBILITY_EVENT_THRESHOLD and certificates>=ELIGIBILITY_CERTIFICATE_THRESHOLD,
-                })
-            eligible_count=sum(1 for student in results if student['eligible'])
-            summary={
-                'pdf_count':len(pdf_names),
-                'unmatched_files':unmatched_files,
-                'eligible_count':eligible_count,
-                'not_eligible_count':len(results)-eligible_count,
-            }
-    return render_template('eligibility.html',folder_url=folder_url,results=results,summary=summary,error=error,
+                    certificates=certificate_counts.get(student['register_no'].strip().upper(),0)
+                    events=student['events']
+                    results.append({
+                        'register_no':student['register_no'],
+                        'name':student['name'],
+                        'department':student['department'],
+                        'class_name':student['class_name'],
+                        'section':student['section'],
+                        'events':events,
+                        'certificates':certificates,
+                        'eligible':events>=ELIGIBILITY_EVENT_THRESHOLD and certificates>=ELIGIBILITY_CERTIFICATE_THRESHOLD,
+                    })
+                eligible_count=sum(1 for student in results if student['eligible'])
+                summary={
+                    'csv_count':len(certificate_counts),
+                    'unmatched_rows':unmatched_rows,
+                    'eligible_count':eligible_count,
+                    'not_eligible_count':len(results)-eligible_count,
+                }
+    return render_template('eligibility.html',csv_filename=csv_filename,results=results,summary=summary,error=error,
                            semester_filter=semester_filter,
-                           drive_api_configured=bool(os.getenv('GOOGLE_DRIVE_API_KEY','').strip()))
+                           drive_api_configured=False)
 
 def semester_eligibility_many(semester_id, student_ids, academic_year=None, persist=True, change_reason='Eligibility recalculated', rules_override=None):
     """Calculate a semester's results with a fixed number of database round trips."""

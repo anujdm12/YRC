@@ -35,7 +35,7 @@ def inject_now():
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS admin_roles(admin_id INTEGER PRIMARY KEY REFERENCES admins(id) ON DELETE CASCADE, role TEXT NOT NULL DEFAULT 'super_admin', department TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS students(id INTEGER PRIMARY KEY, register_no TEXT UNIQUE NOT NULL, name TEXT NOT NULL, department TEXT NOT NULL, class_name TEXT NOT NULL DEFAULT '', section TEXT NOT NULL DEFAULT '', year INTEGER NOT NULL, email TEXT, phone TEXT, yrc_status TEXT NOT NULL DEFAULT 'Active', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS students(id INTEGER PRIMARY KEY, register_no TEXT UNIQUE NOT NULL, name TEXT NOT NULL, department TEXT NOT NULL, class_name TEXT NOT NULL DEFAULT '', section TEXT NOT NULL DEFAULT '', year INTEGER NOT NULL, email TEXT, phone TEXT, yrc_status TEXT NOT NULL DEFAULT 'Active', cohort TEXT NOT NULL DEFAULT 'Current batch', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, event_date TEXT NOT NULL, start_time TEXT, end_time TEXT, venue TEXT, max_participants INTEGER, deadline TEXT, status TEXT NOT NULL DEFAULT 'Upcoming', semester INTEGER, counts_for_eligibility INTEGER NOT NULL DEFAULT 1, academic_year TEXT, activity_category TEXT NOT NULL DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS event_participants(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE, student_id INTEGER NOT NULL REFERENCES students(id), selection_status TEXT NOT NULL DEFAULT 'Selected', selected_at TEXT DEFAULT CURRENT_TIMESTAMP, selected_by INTEGER, UNIQUE(event_id,student_id));
 CREATE TABLE IF NOT EXISTS selection_history(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, decision TEXT NOT NULL, attended_count INTEGER NOT NULL DEFAULT 0, seat_offers INTEGER NOT NULL DEFAULT 0, priority_score INTEGER NOT NULL DEFAULT 0, tie_break TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', decided_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -78,6 +78,8 @@ def init_db():
         conn.execute("ALTER TABLE students ADD COLUMN class_name TEXT NOT NULL DEFAULT ''")
     if 'section' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN section TEXT NOT NULL DEFAULT ''")
+    if 'cohort' not in student_columns:
+        conn.execute("ALTER TABLE students ADD COLUMN cohort TEXT NOT NULL DEFAULT 'Current batch'")
     event_columns={row[1] for row in conn.execute('PRAGMA table_info(events)')}
     if 'semester' not in event_columns:
         conn.execute('ALTER TABLE events ADD COLUMN semester INTEGER')
@@ -243,16 +245,16 @@ def students():
         try: year=int(f.get('year',''))
         except (TypeError,ValueError):
             flash('Choose a valid year of study.','error'); return redirect(url_for('students'))
-        if not f.get('register_no','').strip() or not f.get('name','').strip() or not f.get('department','').strip() or not f.get('class_name','').strip() or year not in range(1,9):
+        if not f.get('register_no','').strip() or not f.get('name','').strip() or not f.get('department','').strip() or not f.get('class_name','').strip() or not f.get('cohort','').strip() or year not in range(1,9):
             flash('Enter the register number, name, department, programme, and a year from 1 to 8.','error'); return redirect(url_for('students'))
         if f.get('yrc_status','Active') not in ('Active','Inactive','Removed'):
             flash('Choose a valid YRC status.','error'); return redirect(url_for('students'))
         try:
-            cur=conn.execute('INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status) VALUES(?,?,?,?,?,?,?,?,?)',(f['register_no'].strip(),f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),f.get('yrc_status','Active')))
+            cur=conn.execute('INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status,cohort) VALUES(?,?,?,?,?,?,?,?,?,?)',(f['register_no'].strip(),f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),f.get('yrc_status','Active'),f['cohort'].strip()))
             audit('Student added','student',cur.lastrowid,'',f['register_no']); conn.commit(); flash('Student added.','success')
         except DB_INTEGRITY_ERROR: conn.rollback(); flash('Register number already exists.','error')
         return redirect(url_for('students'))
-    q=request.args.get('q','').strip(); status=request.args.get('status',''); dept=request.args.get('department',''); section=request.args.get('section','').upper()
+    q=request.args.get('q','').strip(); status=request.args.get('status',''); dept=request.args.get('department',''); section=request.args.get('section','').upper(); cohort=request.args.get('cohort','')
     where=[]; args=[]
     if q: where.append('(name LIKE ? OR register_no LIKE ?)'); args += [f'%{q}%',f'%{q}%']
     if status: where.append('yrc_status=?'); args.append(status)
@@ -260,9 +262,10 @@ def students():
     if dept: where.append('department=?'); args.append(dept)
     if section=='UNASSIGNED': where.append("section=''")
     elif section: where.append('section=?'); args.append(section)
+    if cohort: where.append('cohort=?'); args.append(cohort)
     sql='SELECT s.*, (SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events FROM students s'+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY s.name'
-    rows=conn.execute(sql,args).fetchall(); departments=[r[0] for r in conn.execute('SELECT DISTINCT department FROM students ORDER BY department')]
-    return render_template('students.html', students=rows,q=q,status=status,department=dept,departments=departments,section=section)
+    rows=conn.execute(sql,args).fetchall(); departments=[r[0] for r in conn.execute('SELECT DISTINCT department FROM students ORDER BY department')]; cohorts=[r[0] for r in conn.execute('SELECT DISTINCT cohort FROM students ORDER BY cohort')]
+    return render_template('students.html', students=rows,q=q,status=status,department=dept,departments=departments,section=section,cohort=cohort,cohorts=cohorts)
 
 @app.post('/students/import')
 @login_required
@@ -292,7 +295,8 @@ def import_students():
         if status not in ('Active','Inactive','Removed'): errors.append(f'Row {row_num}: invalid YRC status {status!r}.'); continue
         if reg.casefold() in known: errors.append(f'Row {row_num}: duplicate register number {reg}.'); continue
         known.add(reg.casefold())
-        records.append((reg,name,department,class_name,section,year,(row.get('email') or '').strip(),(row.get('phone') or '').strip(),status))
+        cohort=(row.get('cohort') or '').strip() or 'Current batch'
+        records.append((reg,name,department,class_name,section,year,(row.get('email') or '').strip(),(row.get('phone') or '').strip(),status,cohort))
     if errors:
         preview=' '.join(errors[:5]); more=f' (+{len(errors)-5} more)' if len(errors)>5 else ''
         flash(f'No students imported. Fix {len(errors)} issue(s): {preview}{more}','error'); return redirect(url_for('students'))
@@ -300,7 +304,7 @@ def import_students():
         flash('The CSV has no student rows. No students were imported.','error'); return redirect(url_for('students'))
     conn=db()
     try:
-        conn.executemany('INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status) VALUES(?,?,?,?,?,?,?,?,?)',records)
+        conn.executemany('INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status,cohort) VALUES(?,?,?,?,?,?,?,?,?,?)',records)
         audit('Student CSV imported','student',0,'',f'{len(records)} added'); conn.commit()
     except DB_INTEGRITY_ERROR:
         conn.rollback(); flash('The import was rejected by a database constraint. No students were imported; check register numbers and required fields.','error'); return redirect(url_for('students'))
@@ -372,10 +376,10 @@ def student_edit(sid):
     try: year=int(f.get('year',''))
     except (TypeError,ValueError):
         flash('Choose a valid year of study.','error'); return redirect(url_for('student_detail',sid=sid))
-    if year not in range(1,9) or any(not f.get(k,'').strip() for k in ('register_no','name','department','class_name')):
+    if year not in range(1,9) or any(not f.get(k,'').strip() for k in ('register_no','name','department','class_name','cohort')):
         flash('Enter all required student details and choose a year from 1 to 8.','error'); return redirect(url_for('student_detail',sid=sid))
     try:
-        conn.execute('UPDATE students SET register_no=?,name=?,department=?,class_name=?,section=?,year=?,email=?,phone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(f['register_no'].strip(),f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),sid))
+        conn.execute('UPDATE students SET register_no=?,name=?,department=?,class_name=?,section=?,year=?,email=?,phone=?,cohort=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(f['register_no'].strip(),f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),f['cohort'].strip(),sid))
         audit('Student edited','student',sid,'','profile updated'); conn.commit(); flash('Student profile updated.','success')
     except DB_INTEGRITY_ERROR: conn.rollback(); flash('Register number already belongs to another student.','error')
     return redirect(url_for('student_detail',sid=sid))
@@ -1180,6 +1184,9 @@ def mark_all_present(eid):
 @app.get('/reports')
 @login_required
 def reports():
+    cohort_filter=request.args.get('cohort','')
+    cohort_clause=' AND s.cohort=?' if cohort_filter else ''
+    cohort_args=[cohort_filter] if cohort_filter else []
     semester_filter=request.args.get('semester','All')
     if semester_filter not in ('1','2','3','4','Unassigned'):
         semester_filter='All'
@@ -1195,13 +1202,13 @@ def reports():
          WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_where+''') events,
         (SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id
          WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_where+''') last_event
-        FROM students s WHERE s.yrc_status='Active' ORDER BY events,s.name''',semester_args*2).fetchall()
+        FROM students s WHERE s.yrc_status='Active' '''+cohort_clause+''' ORDER BY events,s.name''',semester_args*2+cohort_args).fetchall()
     attendance_rows=conn.execute('''SELECT s.id,s.register_no,s.name,s.department,s.class_name,s.section,
         e.name event_name,e.event_date
         FROM students s JOIN attendance a ON a.student_id=s.id AND a.status='Present'
         JOIN events e ON e.id=a.event_id
-        WHERE s.yrc_status='Active' AND e.status<>'Cancelled' '''+semester_where+'''
-        ORDER BY s.name,e.event_date,e.name''',semester_args).fetchall()
+        WHERE s.yrc_status='Active' AND e.status<>'Cancelled' '''+semester_where+cohort_clause+'''
+        ORDER BY s.name,e.event_date,e.name''',semester_args+cohort_args).fetchall()
     attended_by_student={}
     for attendance_row in attendance_rows:
         sid=attendance_row['id']
@@ -1238,6 +1245,7 @@ def reports():
                            event_threshold_met=[r for r in attended_rows if r['events'] >= ELIGIBILITY_EVENT_THRESHOLD],
                            total_attendances=total_attendances,
                            department_counts=department_counts,semester_filter=semester_filter,
+                           cohort_filter=cohort_filter,cohorts=[r[0] for r in conn.execute('SELECT DISTINCT cohort FROM students ORDER BY cohort')],
                            credit_rows=credit_rows,credit_totals=sorted(credit_totals.values(),key=lambda item:item['name']))
 
 @app.post('/reports/attendance/<int:attendance_id>/credit')
@@ -1765,12 +1773,12 @@ def attended_students_csv():
 @app.get('/reports/students.csv')
 @login_required
 def students_csv():
-    rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.year,s.email,s.phone,s.yrc_status,
+    rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.year,s.email,s.phone,s.yrc_status,s.cohort,
         (SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status='Present') events
         FROM students s ORDER BY s.name''').fetchall()
     buf=io.StringIO(); writer=csv.writer(buf)
-    writer.writerow(['Register No','Name','Department','Class','Section','Year','Email','Phone','YRC Status','Events Attended'])
-    columns=('register_no','name','department','class_name','section','year','email','phone','yrc_status','events')
+    writer.writerow(['Register No','Name','Department','Class','Section','Year','Email','Phone','YRC Status','Batch','Events Attended'])
+    columns=('register_no','name','department','class_name','section','year','email','phone','yrc_status','cohort','events')
     writer.writerows([[row[key] for key in columns] for row in rows])
     return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-students.csv'})
 

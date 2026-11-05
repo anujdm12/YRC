@@ -10,6 +10,8 @@
 {% block content %}
 <div class="page-heading"><div><div class="eyebrow">STUDENT PARTICIPATION</div><h1>Reports</h1><p class="subhead">Review credit eligibility by department and each student’s attendance history.</p></div></div>
 
+<section class="panel"><form class="filter-bar" method="get"><label>Student batch<select name="cohort"><option value="">All batches</option>{% for c in cohorts %}<option value="{{c}}" {{'selected' if cohort_filter==c}}>{{c}}</option>{% endfor %}</select></label><button class="btn primary">View batch report</button><a class="btn secondary" href="/reports">Clear</a></form></section>
+
 <div class="stats-grid reports-priority-summary">
 <article class="stat-card summary-card"><span class="stat-label">NOT ELIGIBLE · ALL DEPARTMENTS</span><strong>{{not_credit_eligible|length}}</strong><span class="stat-foot">Active students with 0–2 events attended</span></article>
 {% for department in department_counts %}<article class="stat-card department-stat"><span class="stat-label">{{department.name}}</span><strong>{{department.count}}</strong><span class="stat-foot">Not eligible · 0–2 events attended</span></article>{% endfor %}

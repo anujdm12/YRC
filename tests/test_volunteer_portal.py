@@ -141,6 +141,8 @@ class VolunteerPortalTests(unittest.TestCase):
         body = student_client.get('/volunteer/home').get_data(as_text=True)
         self.assertIn('Student Convenors', body)
         self.assertIn('Saaya Rupesh', body)
+        self.assertNotIn('LCA · MAIN CAMPUS', body)
+        self.assertNotIn('LCA · AIRPORT CAMPUS', body)
         self.assertIn('Jeevan Chandapillai Koshy', body)
         self.assertIn('mailto:24bcyb59@kristujayanti.com', body)
 

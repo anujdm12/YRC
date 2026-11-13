@@ -11,7 +11,6 @@
 .convenor-info{display:flex;flex-direction:column;min-width:0;align-self:stretch;padding:4px 0}
 .convenor-tags{display:flex;flex-wrap:wrap;gap:6px}
 .convenor-tags>span{padding:5px 7px;border:1px solid #302d31;border-radius:99px;color:#b5aab0;font:800 7px var(--font-mono);letter-spacing:.4px}
-.convenor-tags>.campus-tag{border-color:#14513b;background:#082a20;color:#40dba0}
 .convenor-info h3{margin:9px 0 3px;color:#fff;font:700 clamp(15px,1.7vw,20px)/1.18 var(--serif);letter-spacing:-.5px}
 .convenor-info>p{margin:0;color:#b2aab0;font-size:10px}
 .convenor-contact{display:grid;gap:5px;margin-top:auto;padding-top:12px;border-top:1px solid #292629}

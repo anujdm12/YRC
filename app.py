@@ -605,14 +605,15 @@ def student_credentials_bulk():
         return redirect(url_for('student_credentials_bulk'))
     students=conn.execute('SELECT id,register_no,name,yrc_status FROM students ORDER BY register_no').fetchall()
     issued_rows=[]
+    password='KJU'
+    password_hash=generate_password_hash(password)
     try:
         for student in students:
-            password='KJU'
             token=secrets.token_urlsafe(32)
             conn.execute('''INSERT INTO student_accounts(student_id,password_hash,session_token)
                 VALUES(?,?,?) ON CONFLICT(student_id) DO UPDATE SET password_hash=excluded.password_hash,
                 session_token=excluded.session_token,updated_at=CURRENT_TIMESTAMP''',
-                (student['id'],generate_password_hash(password),token))
+                (student['id'],password_hash,token))
             issued_rows.append({
                 'name':student['name'],
                 'register_no':student['register_no'],

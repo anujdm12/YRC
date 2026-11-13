@@ -141,7 +141,7 @@ body::before {
   position: fixed !important;
   top: 0 !important;
   left: 0 !important;
-  width: 0% !important;
+  width: 0%;
   height: 3px !important;
   background: linear-gradient(90deg, var(--crimson-deep), var(--crimson-vivid) 65%, #fff 100%) !important;
   box-shadow: 
@@ -527,7 +527,7 @@ h2 {
 
 .admin-card small {
   font-size: 9.5px !important;
-  color: var(--titanium-500) !important;
+  color: var(--titanium-400) !important;
   font-family: var(--font-mono) !important;
 }
 
@@ -1070,7 +1070,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   margin-top: 12px !important;
   border-top: 1px solid var(--border-hairline) !important;
   font-size: 11px !important;
-  color: var(--titanium-500) !important;
+  color: var(--titanium-400) !important;
   font-family: var(--font-mono) !important;
 }
 
@@ -1489,7 +1489,7 @@ tbody tr:hover td {
 .cell-sub {
   display: block !important;
   font-size: 11px !important;
-  color: var(--titanium-500) !important;
+  color: var(--titanium-400) !important;
   margin-top: 2px !important;
   font-family: var(--font-mono) !important;
 }
@@ -1655,7 +1655,6 @@ dialog.modal, .student-picker {
   padding: 28px 32px !important;
   max-width: min(660px, calc(100vw - 32px)) !important;
   width: 100% !important;
-  position: relative !important;
 }
 
 dialog.modal::backdrop {
@@ -2098,7 +2097,7 @@ dialog.modal[open] {
   font-family: var(--font-mono) !important;
   font-size: 10.5px !important;
   letter-spacing: 0.16em !important;
-  color: var(--titanium-500) !important;
+  color: var(--titanium-400) !important;
   padding-top: 24px !important;
   border-top: 1px solid var(--border-hairline) !important;
 }
@@ -2258,7 +2257,7 @@ dialog.modal[open] {
   text-align: center !important;
   font-family: var(--font-mono) !important;
   font-size: 10.5px !important;
-  color: var(--titanium-500) !important;
+  color: var(--titanium-400) !important;
   letter-spacing: 0.08em !important;
 }
 

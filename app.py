@@ -599,28 +599,21 @@ def student_credentials_bulk():
     conn=db()
     if request.method=='GET':
         student_count=conn.execute('SELECT COUNT(*) FROM students').fetchone()[0]
-        return render_template('student_credentials_bulk.html',student_count=student_count,issued_rows=None)
+        return render_template('student_credentials_bulk.html',student_count=student_count,issued_count=None,issued_rows=None)
     if request.form.get('confirm')!='issue':
         flash('Confirm the bulk password reset before continuing.','error')
         return redirect(url_for('student_credentials_bulk'))
-    students=conn.execute('SELECT id,register_no,name,yrc_status FROM students ORDER BY register_no').fetchall()
-    issued_rows=[]
+    student_count=conn.execute('SELECT COUNT(*) FROM students').fetchone()[0]
     password='KJU'
     password_hash=generate_password_hash(password)
+    token=secrets.token_urlsafe(32)
     try:
-        for student in students:
-            token=secrets.token_urlsafe(32)
-            conn.execute('''INSERT INTO student_accounts(student_id,password_hash,session_token)
-                VALUES(?,?,?) ON CONFLICT(student_id) DO UPDATE SET password_hash=excluded.password_hash,
-                session_token=excluded.session_token,updated_at=CURRENT_TIMESTAMP''',
-                (student['id'],password_hash,token))
-            issued_rows.append({
-                'name':student['name'],
-                'register_no':student['register_no'],
-                'yrc_status':student['yrc_status'],
-                'password':password,
-            })
-        audit('Bulk student portal credentials issued','student',0,'',f'{len(issued_rows)} accounts')
+        conn.execute('''INSERT INTO student_accounts(student_id,password_hash,session_token)
+            SELECT id,?,? FROM students WHERE TRUE
+            ON CONFLICT(student_id) DO UPDATE SET password_hash=excluded.password_hash,
+            session_token=excluded.session_token,updated_at=CURRENT_TIMESTAMP''',
+            (password_hash,token))
+        audit('Bulk student portal credentials issued','student',0,'',f'{student_count} accounts')
         conn.commit()
     except DB_ERROR:
         conn.rollback()
@@ -629,8 +622,9 @@ def student_credentials_bulk():
         return redirect(url_for('student_credentials_bulk'))
     response=app.make_response(render_template(
         'student_credentials_bulk.html',
-        student_count=len(issued_rows),
-        issued_rows=issued_rows))
+        student_count=student_count,
+        issued_count=student_count,
+        issued_rows=[]))
     response.headers['Cache-Control']='no-store, private'
     response.headers['Pragma']='no-cache'
     response.headers['Expires']='0'

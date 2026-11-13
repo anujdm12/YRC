@@ -188,7 +188,7 @@ class VolunteerPortalTests(unittest.TestCase):
         })
         self.assertEqual(429, response.status_code)
 
-    def test_bulk_credentials_use_shared_password_and_are_hashed(self):
+    def test_bulk_credentials_set_shared_password_for_all_accounts(self):
         response = portal.app.test_client().get('/students/credentials/bulk')
         self.assertEqual(302, response.status_code)
 
@@ -201,10 +201,7 @@ class VolunteerPortalTests(unittest.TestCase):
         })
         self.assertEqual(200, response.status_code)
         self.assertEqual('no-store, private', response.headers.get('Cache-Control'))
-        passwords = re.findall(rb'<td><code>([^<]+)</code></td>', response.data)
-        self.assertEqual(2, len(passwords))
-        self.assertEqual([b'KJU', b'KJU'], passwords)
-        self.assertNotIn(passwords[0].decode(), response.headers.get('Set-Cookie', ''))
+        self.assertIn(b'2 student accounts now use the shared password KJU', response.data)
 
         with portal.app.app_context():
             conn = portal.db()
@@ -213,13 +210,9 @@ class VolunteerPortalTests(unittest.TestCase):
                 (self.student_id, self.other_student_id)).fetchall()
             self.assertEqual(2, len(accounts))
             stored_hashes = {row['register_no']:row['password_hash'] for row in accounts}
-        for password in passwords:
-            password = password.decode()
-            self.assertEqual('KJU', password)
-            self.assertTrue(any(check_password_hash(value, password) for value in stored_hashes.values()))
         self.assertTrue(all(check_password_hash(value, 'KJU') for value in stored_hashes.values()))
         refreshed = self.admin_client.get('/students/credentials/bulk')
-        self.assertNotIn(passwords[0].decode(), refreshed.get_data(as_text=True))
+        self.assertNotIn(b'2 student accounts now use the shared password KJU', refreshed.data)
 
     def test_admin_can_add_and_edit_convenor_name_and_photo(self):
         def image_file(color,filename):

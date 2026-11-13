@@ -1996,7 +1996,8 @@ dialog.modal[open] {
     linear-gradient(135deg, #030306 0%, #0a0610 50%, #030306 100%) !important;
   color: var(--titanium-100) !important;
   position: relative !important;
-  overflow: hidden !important;
+  overflow-x: clip !important;
+  overflow-y: auto !important;
 }
 
 #loginCanvas {
@@ -2220,7 +2221,7 @@ dialog.modal[open] {
   width: 100% !important;
 }
 
-.password-field input {
+.login-form .password-field input {
   padding-right: 68px !important;
 }
 

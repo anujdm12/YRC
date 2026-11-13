@@ -1,19 +1,397 @@
 {% extends 'base.html' %}
 {% block title %}{{event.name}}{% endblock %}
-{% block crumb %}<a href="/events">EVENTS</a> / EVENT WORKSPACE{% endblock %}
+{% block crumb %}<a href="/events">EVENTS</a> / WORKSPACE // {{ event.name }}{% endblock %}
+
 {% block content %}
-<style>.bulk-picker{width:min(640px,calc(100vw - 32px));max-height:min(88vh,820px)}.bulk-selection-tools{display:flex;align-items:center;gap:9px;margin:12px 0;font-size:11px;color:#b9adb4}.bulk-selection-tools span{margin-right:auto;font-weight:700}.bulk-student-results{display:grid;gap:6px;max-height:38vh;overflow:auto;padding:8px;border:1px solid rgba(255,255,255,.12);border-radius:11px;background:rgba(7,7,11,.7)}.bulk-student-option{display:grid!important;grid-template-columns:18px minmax(0,1fr);align-items:center;gap:10px;margin:0!important;padding:10px;border:1px solid transparent;border-radius:8px;background:rgba(255,255,255,.025);cursor:pointer}.bulk-student-option:hover{border-color:rgba(227,24,55,.35);background:rgba(227,24,55,.1)}.bulk-student-option input{width:16px;height:16px;margin:0;accent-color:#e31837}.bulk-student-option span{display:grid;min-width:0;gap:4px}.bulk-student-option strong{color:#f6f1f3;font-size:12px}.bulk-student-option small{overflow:hidden;color:#aaa0a6;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.bulk-student-option[hidden]{display:none!important}.bulk-picker .picker-selection{margin-top:12px}@media(max-width:520px){.bulk-picker{width:calc(100vw - 20px);padding:18px 14px}.bulk-student-results{max-height:35vh}}</style>
-<div class="backline"><a href="/events">&larr; Event calendar</a></div>
-<div class="event-heading"><div><div class="eyebrow">{{event.event_date}}{% if event.start_time %} · {{event.start_time}}{% endif %}</div><h1>{{event.name}}</h1><p class="subhead">{{event.venue or 'Venue not set'}}</p></div><span class="badge {{event.status|lower}}">{{event.status}}</span></div>
-{% if event.description %}<div class="event-description">{{event.description}}</div>{% endif %}
-<section class="panel"><div class="panel-head"><div><h2>Semester record</h2><p>Changing the semester keeps this event's attendance and credit history.</p></div><span class="count-pill">{{'Semester ' ~ event.semester if event.semester else 'Historical / unassigned'}}</span></div><form class="event-filter" method="post" action="{{url_for('event_semester_update',eid=event.id)}}"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><input type="hidden" name="confirm_reassignment" value="1"><label>Assign to semester<select name="semester"><option value="" {{'selected' if not event.semester}}>Needs review / unassigned</option>{% for x in range(1,5) %}<option value="{{x}}" {{'selected' if event.semester==x}}>Semester {{x}}</option>{% endfor %}</select></label><label>Academic year<input name="academic_year" value="{{event.academic_year or ''}}" placeholder="2026-2027"></label><label>Activity category<input name="activity_category" value="{{event.activity_category or ''}}" maxlength="80"></label><button class="btn secondary" data-confirm="This event has existing participation records. Reassigning it moves those records into a different semester or academic year. The records remain intact. Continue?">Save assignment</button></form></section><section class="panel"><div class="panel-head"><div><h2>Eligibility activity setting</h2><p>Choose whether present attendance here counts toward semester activity requirements.</p></div><span class="badge {{ 'active' if event.counts_for_eligibility else 'absent' }}">{{ 'Counts' if event.counts_for_eligibility else 'Excluded' }}</span></div><form class="event-filter" method="post" action="{{url_for('event_eligibility_update',eid=event.id)}}"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><label>Activity counts towards eligibility<select name="counts_for_eligibility"><option value="1" {{'selected' if event.counts_for_eligibility}}>Yes</option><option value="0" {{'selected' if not event.counts_for_eligibility}}>No</option></select></label><button class="btn secondary">Save activity setting</button></form></section>
-<div class="event-actions"><form method="post" action="/events/{{event.id}}/recommend"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><button class="btn primary">Fairness: Generate fair recommendations</button></form>{% if event.status!='Cancelled' %}<button class="btn secondary" onclick="document.getElementById('bulkParticipants').showModal()">+ Select multiple candidates</button><button class="btn secondary" onclick="document.getElementById('addParticipant').showModal()">+ Add a student manually</button>{% endif %}<span class="action-note">Prioritizes active students with fewer verified events.</span>{% if event.status=='Cancelled' %}<form method="post" action="/events/{{event.id}}/permanent-delete"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><button class="btn danger small" data-confirm="Permanently delete this cancelled event and its linked records? This cannot be undone.">Delete event</button></form>{% else %}<form method="post" action="/events/{{event.id}}/delete"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><button class="btn danger small" data-confirm="Cancel this event? Participation and attendance history will be preserved.">Cancel event</button></form>{% endif %}</div>
-{% if event.status!='Cancelled' %}<section class="panel event-import-panel"><div class="panel-head"><div><h2>Import participants from a sheet</h2><p>Upload a CSV exported from Google Sheets or Excel to add several volunteers at once.</p></div><span class="count-pill">Roster match</span></div><form class="event-import-form" method="post" enctype="multipart/form-data" action="{{ url_for('import_event_participants',eid=event.id) }}"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><label class="event-import-file">Choose participant CSV<input type="file" name="file" accept=".csv,text/csv" required></label><button class="btn secondary" type="submit">Import participants</button><small class="field-help">Required columns: Event Name and Register Number and/or Full Name. The event name must match this page (ignoring case and extra spaces). Register number matches first, then a unique exact name. Attendance is left unchanged.</small></form></section>{% endif %}
-{% if event.status!='Cancelled' %}<dialog id="bulkParticipants" class="modal student-picker bulk-picker"><form id="bulkParticipantForm" method="post" action="{{url_for('select_multiple_students',eid=event.id)}}"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><div class="modal-head"><div><span class="eyebrow">MANUAL SELECTION</span><h2>Select multiple candidates</h2><p class="picker-subtitle">Choose several active students to add to this event.</p></div><button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button></div><label class="student-search-label" for="bulkStudentSearch">Search students<input id="bulkStudentSearch" type="search" placeholder="Name, register number, or department" autocomplete="off"><small class="field-help">Search the roster, then tick each candidate you want to add.</small></label><div class="bulk-selection-tools"><span id="bulkSelectionCount" aria-live="polite">0 selected</span><button type="button" class="mini-btn" id="bulkSelectVisible">Select visible</button><button type="button" class="mini-btn" id="bulkClearSelection">Clear</button></div><div id="bulkStudentResults" class="bulk-student-results">{% for s in available %}<label class="bulk-student-option" data-search="{{(s.name ~ ' ' ~ s.register_no ~ ' ' ~ s.department ~ ' ' ~ s.class_name ~ ' ' ~ (s.section or ''))|lower}}"><input type="checkbox" name="student_ids" value="{{s.id}}"><span><strong>{{s.name}}</strong><small>{{s.register_no}} · {{s.department}} · {{s.class_name}}{% if s.section %} · Section {{s.section}}{% endif %}</small></span></label>{% else %}<div class="picker-empty">No eligible students remain for this event.</div>{% endfor %}<div id="bulkStudentNoMatches" class="picker-empty" hidden>No students match that search.</div></div><div class="picker-selection"><span class="picker-selection-icon">+</span><span id="bulkSelectionSummary">Select candidates above to add them together.</span></div><div class="modal-actions"><button type="button" class="btn secondary" onclick="this.closest('dialog').close()">Cancel</button><button id="bulkParticipantSubmit" class="btn primary" disabled>Add selected</button></div></form></dialog>{% endif %}
-<script>(function(){const dialog=document.getElementById('bulkParticipants');const form=document.getElementById('bulkParticipantForm');if(!dialog||!form)return;const search=document.getElementById('bulkStudentSearch');const rows=[...form.querySelectorAll('.bulk-student-option')];const boxes=rows.map(row=>row.querySelector('input[type=checkbox]'));const count=document.getElementById('bulkSelectionCount');const summary=document.getElementById('bulkSelectionSummary');const submit=document.getElementById('bulkParticipantSubmit');const noMatches=document.getElementById('bulkStudentNoMatches');function update(){const checked=boxes.filter(box=>box.checked).length;count.textContent=checked+' selected';summary.textContent=checked?checked+' candidate'+(checked===1?'':'s')+' will be added. Attendance will remain unchanged.':'Select candidates above to add them together.';submit.disabled=checked===0}search.addEventListener('input',()=>{const query=search.value.trim().toLocaleLowerCase();let visible=0;for(const row of rows){const matches=row.dataset.search.includes(query);row.hidden=!matches;if(matches)visible++}if(noMatches)noMatches.hidden=visible>0});boxes.forEach(box=>box.addEventListener('change',update));document.getElementById('bulkSelectVisible').addEventListener('click',()=>{rows.forEach((row,index)=>{if(!row.hidden)boxes[index].checked=true});update()});document.getElementById('bulkClearSelection').addEventListener('click',()=>{boxes.forEach(box=>box.checked=false);update()});form.addEventListener('submit',event=>{if(!boxes.some(box=>box.checked)){event.preventDefault();search.focus()}});dialog.addEventListener('close',()=>{search.value='';search.dispatchEvent(new Event('input'));boxes.forEach(box=>box.checked=false);update()})})();</script>
-<section class="panel"><div class="panel-head"><div><h2>Participants &amp; attendance</h2><p>{{participants|length}} selected volunteers</p></div><div class="event-row-actions"><span class="count-pill">{{participants|selectattr('attendance','equalto','Present')|list|length}} present</span>{% if event.status!='Cancelled' and participants %}<form method="post" action="/events/{{event.id}}/attendance/mark-all-present"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><button class="btn primary small" data-confirm="Mark all {{participants|length}} selected participants present? Existing attendance marks will be changed to Present.">Mark all present</button></form>{% endif %}</div></div><div class="table-scroll"><table><thead><tr><th>STUDENT</th><th>REGISTER NO.</th><th>ATTENDANCE</th><th>ACTIONS</th></tr></thead><tbody>
-{% for p in participants %}<tr><td><a class="person-cell" href="/students/{{p.id}}"><span class="person-avatar">{{p.name[0]|upper}}</span><span><span class="table-title">{{p.name}}</span><small class="cell-sub">{{p.department}} · {{p.class_name}} · Section {{p.section or 'Unassigned'}}</small></span></a></td><td>{{p.register_no}}</td><td>{% if p.attendance %}<span class="badge {{p.attendance|lower}}">{{p.attendance}}</span><small class="cell-sub">{{p.marked_at}}</small>{% else %}<span class="muted">Not marked</span>{% endif %}</td><td><div class="event-row-actions"><form class="inline-actions" method="post" action="/events/{{event.id}}/attendance/{{p.id}}"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><button class="mini-btn present" name="status" value="Present">Present</button><button class="mini-btn absent" name="status" value="Absent">Absent</button>{% if p.attendance %}<button class="mini-btn" name="status" value="Undo" data-confirm="Clear this attendance mark?">Clear mark</button>{% endif %}</form><form method="post" action="/events/{{event.id}}/participants/{{p.id}}/remove"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><button class="mini-btn" data-confirm="Remove this student from the selected list?">Deselect</button></form></div></td></tr>
-{% else %}<tr><td colspan="4" class="empty-cell">No participants selected. Generate a fair recommendation list to get started.</td></tr>{% endfor %}</tbody></table></div></section>
-<dialog id="addParticipant" class="modal student-picker"><form id="participantForm" method="post" action="/events/{{event.id}}/select"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><input type="hidden" id="participantStudent" name="student_id"><div class="modal-head"><div><span class="eyebrow">MANUAL OVERRIDE</span><h2>Add a participant</h2><p class="picker-subtitle">All active students are listed alphabetically, regardless of priority.</p></div><button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">×</button></div><label class="student-search-label" for="participantSearch">Search students<input id="participantSearch" type="search" placeholder="Name, register number, or department" autocomplete="off" aria-controls="participantResults"><small class="field-help">Search the full list by name, register number, or department.</small></label><div class="picker-list-heading"><strong>Available students</strong><span>{{available|length}} students</span></div><div id="participantResults" class="student-search-results" role="list">{% for s in available %}<button type="button" class="student-search-option" role="listitem" aria-pressed="false" data-id="{{s.id}}" data-search="{{(s.name ~ ' ' ~ s.register_no ~ ' ' ~ s.department ~ ' ' ~ s.class_name ~ ' ' ~ (s.section or ''))|lower}}"><span class="picker-avatar">{{s.name[0]|upper}}</span><span class="picker-student-info"><strong>{{s.name}}</strong><small>{{s.register_no}} · {{s.department}} · {{s.class_name}}{% if s.section %} · Section {{s.section}}{% endif %}</small></span><span class="picker-check" aria-hidden="true">✓</span></button>{% else %}<div class="picker-empty">No eligible students remain for this event.</div>{% endfor %}{% if available %}<div id="participantNoMatches" class="picker-empty" hidden>No students match that search.</div>{% endif %}</div><div class="picker-selection" aria-live="polite"><span class="picker-selection-icon">+</span><span id="participantSelectionText">Select a student from the list</span></div><div class="modal-actions"><button type="button" class="btn secondary" onclick="this.closest('dialog').close()">Cancel</button><button id="addParticipantSubmit" class="btn primary" disabled>Add student</button></div></form></dialog>
+<style>
+.bulk-picker { width: min(680px, calc(100vw - 32px)); max-height: min(88vh, 840px); }
+.bulk-selection-tools { display: flex; align-items: center; gap: 10px; margin: 14px 0; font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono); }
+.bulk-selection-tools span { margin-right: auto; font-weight: 700; color: #ffffff; }
+.bulk-student-results { display: grid; gap: 6px; max-height: 38vh; overflow-y: auto; padding: 10px; border: 1px solid var(--border-medium); border-radius: var(--radius-md); background: rgba(8, 8, 12, 0.7); }
+.bulk-student-option { display: grid !important; grid-template-columns: 20px minmax(0,1fr); align-items: center; gap: 12px; margin: 0 !important; padding: 10px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.025); cursor: pointer; transition: all 0.16s ease; }
+.bulk-student-option:hover { border-color: var(--border-crimson); background: rgba(227, 24, 55, 0.12); }
+.bulk-student-option input { width: 16px; height: 16px; margin: 0; accent-color: var(--crimson-vivid); }
+.bulk-student-option span { display: grid; min-width: 0; gap: 4px; }
+.bulk-student-option strong { color: #ffffff; font-size: 12.5px; }
+.bulk-student-option small { overflow: hidden; color: var(--text-muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.bulk-student-option[hidden] { display: none !important; }
+.bulk-picker .picker-selection { margin-top: 14px; }
+@media (max-width: 520px) {
+  .bulk-picker { width: calc(100vw - 20px); padding: 18px 14px; }
+  .bulk-student-results { max-height: 35vh; }
+}
+</style>
+
+<div class="backline">
+  <a class="text-link" href="/events">&larr; Return to event calendar</a>
+</div>
+
+<div class="event-heading" style="margin-top:14px">
+  <div>
+    <div class="eyebrow">{{event.event_date}}{% if event.start_time %} &middot; {{event.start_time}}{% endif %}</div>
+    <h1>{{event.name}}</h1>
+    <p class="subhead">{{event.venue or 'Venue not yet specified'}}</p>
+  </div>
+  <span class="badge {{event.status|lower}}">{{event.status}}</span>
+</div>
+
+{% if event.description %}
+<div class="event-description">{{event.description}}</div>
+{% endif %}
+
+<div class="dashboard-grid" style="margin-bottom:20px">
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Semester record</h2>
+        <p>Changing the semester preserves event attendance and credit points.</p>
+      </div>
+      <span class="count-pill">{{'Semester ' ~ event.semester if event.semester else 'Historical / unassigned'}}</span>
+    </div>
+    <form class="event-filter" method="post" action="{{url_for('event_semester_update',eid=event.id)}}" style="margin-bottom:0">
+      <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+      <select name="semester" aria-label="Assign semester">
+        <option value="" {{'selected' if not event.semester}}>Historical / unassigned</option>
+        {% for x in range(1,5) %}
+        <option value="{{x}}" {{'selected' if event.semester==x}}>Semester {{x}}</option>
+        {% endfor %}
+      </select>
+      <button class="btn secondary">Save semester</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Eligibility activity status</h2>
+        <p>Controls whether verified attendance counts toward term requirements.</p>
+      </div>
+      <span class="badge {{ 'active' if event.counts_for_eligibility else 'absent' }}">{{ 'Counts' if event.counts_for_eligibility else 'Excluded' }}</span>
+    </div>
+    <form class="event-filter" method="post" action="{{url_for('event_eligibility_update',eid=event.id)}}" style="margin-bottom:0">
+      <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+      <select name="counts_for_eligibility" aria-label="Counts towards eligibility">
+        <option value="1" {{'selected' if event.counts_for_eligibility}}>Yes</option>
+        <option value="0" {{'selected' if not event.counts_for_eligibility}}>No</option>
+      </select>
+      <button class="btn secondary">Save setting</button>
+    </form>
+  </section>
+</div>
+
+<div class="event-actions">
+  <form method="post" action="/events/{{event.id}}/recommend">
+    <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+    <button class="btn primary">&#10038; Fairness: Generate fair recommendations</button>
+  </form>
+  {% if event.status!='Cancelled' %}
+  <button class="btn secondary" onclick="document.getElementById('bulkParticipants').showModal()">＋ Select multiple candidates</button>
+  <button class="btn secondary" onclick="document.getElementById('addParticipant').showModal()">＋ Add student manually</button>
+  {% endif %}
+  <span class="action-note" style="color:var(--text-dim);font-size:11.5px;font-family:var(--font-mono)">Prioritizes active students with fewer verified events.</span>
+  <div style="margin-left:auto">
+    {% if event.status=='Cancelled' %}
+    <form method="post" action="/events/{{event.id}}/permanent-delete">
+      <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+      <button class="btn danger small" data-confirm="Permanently delete this cancelled event and its linked records? This cannot be undone.">Delete event</button>
+    </form>
+    {% else %}
+    <form method="post" action="/events/{{event.id}}/delete">
+      <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+      <button class="btn danger small" data-confirm="Cancel this event? Participation and attendance history will be preserved.">Cancel event</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if event.status!='Cancelled' %}
+<section class="panel event-import-panel" style="margin-bottom:20px">
+  <div class="panel-head">
+    <div>
+      <h2>Import participants from spreadsheet</h2>
+      <p>Upload a CSV exported from Google Sheets or Excel to stage volunteers in bulk.</p>
+    </div>
+    <span class="count-pill">Roster Match</span>
+  </div>
+  <form class="event-import-form" method="post" enctype="multipart/form-data" action="{{ url_for('import_event_participants',eid=event.id) }}">
+    <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+    <label class="event-import-file">Choose participant CSV
+      <input type="file" name="file" accept=".csv,text/csv" required>
+    </label>
+    <button class="btn secondary" type="submit">&#8593; Import participants</button>
+    <small class="field-help" style="color:var(--text-muted);font-size:11px;grid-column:1/-1;margin-top:6px">Required columns: Event Name and Register Number and/or Full Name. Register number matches first, then unique exact name. Attendance is left unchanged.</small>
+  </form>
+</section>
+{% endif %}
+
+{% if event.status!='Cancelled' %}
+<dialog id="bulkParticipants" class="modal student-picker bulk-picker">
+  <form id="bulkParticipantForm" method="post" action="{{url_for('select_multiple_students',eid=event.id)}}">
+    <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">BULK SELECTION // MULTI-SELECT</span>
+        <h2>Select multiple candidates</h2>
+        <p class="picker-subtitle">Select active volunteers to add to this event workspace.</p>
+      </div>
+      <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">&times;</button>
+    </div>
+    <label class="student-search-label" for="bulkStudentSearch">Search roster
+      <input id="bulkStudentSearch" type="search" placeholder="Name, register number, or department" autocomplete="off">
+      <small class="field-help">Filter the roster, then tick each candidate you want to add.</small>
+    </label>
+    <div class="bulk-selection-tools">
+      <span id="bulkSelectionCount" aria-live="polite">0 selected</span>
+      <button type="button" class="mini-btn" id="bulkSelectVisible">Select visible</button>
+      <button type="button" class="mini-btn" id="bulkClearSelection">Clear</button>
+    </div>
+    <div id="bulkStudentResults" class="bulk-student-results">
+      {% for s in available %}
+      <label class="bulk-student-option" data-search="{{(s.name ~ ' ' ~ s.register_no ~ ' ' ~ s.department ~ ' ' ~ s.class_name ~ ' ' ~ (s.section or ''))|lower}}">
+        <input type="checkbox" name="student_ids" value="{{s.id}}">
+        <span>
+          <strong>{{s.name}}</strong>
+          <small>{{s.register_no}} &middot; {{s.department}} &middot; {{s.class_name}}{% if s.section %} &middot; Section {{s.section}}{% endif %}</small>
+        </span>
+      </label>
+      {% else %}
+      <div class="picker-empty" style="padding:24px;text-align:center;color:var(--text-muted)">No eligible students remain for this event.</div>
+      {% endfor %}
+      <div id="bulkStudentNoMatches" class="picker-empty" hidden style="padding:24px;text-align:center;color:var(--text-muted)">No students match that search.</div>
+    </div>
+    <div class="picker-selection" style="display:flex;align-items:center;gap:10px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid var(--border-subtle);border-radius:var(--radius-md)">
+      <span class="picker-selection-icon" style="color:var(--crimson-vivid);font-weight:700">＋</span>
+      <span id="bulkSelectionSummary" style="font-size:12px;color:var(--text-secondary)">Select candidates above to add them together.</span>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn secondary" onclick="this.closest('dialog').close()">Cancel</button>
+      <button id="bulkParticipantSubmit" class="btn primary" disabled>Add selected</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Participants &amp; attendance roster</h2>
+      <p>{{participants|length}} selected volunteers enrolled in this event</p>
+    </div>
+    <div class="event-row-actions">
+      <span class="count-pill">{{participants|selectattr('attendance','equalto','Present')|list|length}} present</span>
+      {% if event.status!='Cancelled' and participants %}
+      <form method="post" action="/events/{{event.id}}/attendance/mark-all-present" style="display:inline">
+        <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+        <button class="btn primary small" data-confirm="Mark all {{participants|length}} selected participants present? Existing attendance marks will be changed to Present.">Mark all present</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>STUDENT</th>
+          <th>REGISTER NO.</th>
+          <th>ATTENDANCE STATUS</th>
+          <th>ACTIONS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in participants %}
+        <tr>
+          <td>
+            <a class="person-cell" href="/students/{{p.id}}">
+              <span class="person-avatar">{{p.name[0]|upper}}</span>
+              <span>
+                <span class="table-title">{{p.name}}</span>
+                <small class="cell-sub">{{p.department}} &middot; {{p.class_name}} &middot; Section {{p.section or 'Unassigned'}}</small>
+              </span>
+            </a>
+          </td>
+          <td><span style="font-family:var(--font-mono);font-size:12px">{{p.register_no}}</span></td>
+          <td>
+            {% if p.attendance %}
+            <span class="badge {{p.attendance|lower}}">{{p.attendance}}</span>
+            <small class="cell-sub">{{p.marked_at}}</small>
+            {% else %}
+            <span class="badge pending" style="opacity:0.7">Not marked</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="inline-actions">
+              <form class="inline-actions" method="post" action="/events/{{event.id}}/attendance/{{p.id}}">
+                <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+                <button class="mini-btn present" name="status" value="Present">Present</button>
+                <button class="mini-btn absent" name="status" value="Absent">Absent</button>
+                {% if p.attendance %}
+                <button class="mini-btn" name="status" value="Undo" data-confirm="Clear this attendance mark?">Clear</button>
+                {% endif %}
+              </form>
+              <form method="post" action="/events/{{event.id}}/participants/{{p.id}}/remove" style="display:inline">
+                <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+                <button class="mini-btn" data-confirm="Remove this student from the selected list?">Deselect</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="4" class="empty-cell">No participants selected. Generate fair recommendations or add students manually.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<dialog id="addParticipant" class="modal student-picker">
+  <form id="participantForm" method="post" action="/events/{{event.id}}/select">
+    <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+    <input type="hidden" id="participantStudent" name="student_id">
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">MANUAL OVERRIDE // SELECTION</span>
+        <h2>Add a participant</h2>
+        <p class="picker-subtitle">Active students sorted alphabetically regardless of priority.</p>
+      </div>
+      <button type="button" class="modal-close" aria-label="Close" onclick="this.closest('dialog').close()">&times;</button>
+    </div>
+    <label class="student-search-label" for="participantSearch">Search students
+      <input id="participantSearch" type="search" placeholder="Name, register number, or department" autocomplete="off">
+    </label>
+    <div class="picker-list-heading" style="display:flex;justify-content:space-between;margin:12px 0 6px;font-size:11px;font-family:var(--font-mono);color:var(--text-muted)">
+      <strong>Available students</strong>
+      <span>{{available|length}} roster candidates</span>
+    </div>
+    <div id="participantResults" class="student-search-results" style="display:grid;gap:5px;max-height:280px;overflow-y:auto;padding:8px;border:1px solid var(--border-medium);border-radius:var(--radius-md);background:rgba(8,8,12,0.7)">
+      {% for s in available %}
+      <button type="button" class="student-search-option" role="listitem" aria-pressed="false" data-id="{{s.id}}" data-search="{{(s.name ~ ' ' ~ s.register_no ~ ' ' ~ s.department ~ ' ' ~ s.class_name ~ ' ' ~ (s.section or ''))|lower}}" style="display:grid;grid-template-columns:36px minmax(0,1fr) 20px;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--radius-sm);background:transparent;border:1px solid transparent;cursor:pointer;text-align:left;color:inherit">
+        <span class="picker-avatar" style="width:34px;height:34px;border-radius:8px;background:rgba(227,24,55,0.15);color:var(--crimson-vivid);display:flex;align-items:center;justify-content:center;font-weight:700">{{s.name[0]|upper}}</span>
+        <span class="picker-student-info" style="display:grid;gap:2px">
+          <strong style="color:#ffffff;font-size:12px">{{s.name}}</strong>
+          <small style="color:var(--text-muted);font-size:10.5px;font-family:var(--font-mono)">{{s.register_no}} &middot; {{s.department}} &middot; {{s.class_name}}{% if s.section %} &middot; Section {{s.section}}{% endif %}</small>
+        </span>
+        <span class="picker-check" aria-hidden="true" style="color:var(--emerald-core);font-weight:700;font-size:13px">&#10003;</span>
+      </button>
+      {% else %}
+      <div class="picker-empty" style="padding:20px;text-align:center;color:var(--text-muted)">No eligible students remain for this event.</div>
+      {% endfor %}
+      {% if available %}
+      <div id="participantNoMatches" class="picker-empty" hidden style="padding:20px;text-align:center;color:var(--text-muted)">No students match that search.</div>
+      {% endif %}
+    </div>
+    <div class="picker-selection" aria-live="polite" style="display:flex;align-items:center;gap:10px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid var(--border-subtle);border-radius:var(--radius-md);margin-top:12px">
+      <span class="picker-selection-icon" style="color:var(--crimson-vivid);font-weight:700">＋</span>
+      <span id="participantSelectionText" style="font-size:12px;color:var(--text-secondary)">Select a student from the list</span>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn secondary" onclick="this.closest('dialog').close()">Cancel</button>
+      <button id="addParticipantSubmit" class="btn primary" disabled>Add student</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}
-{% block scripts %}<script>(function(){const dialog=document.getElementById('addParticipant');const form=document.getElementById('participantForm');const search=document.getElementById('participantSearch');const studentId=document.getElementById('participantStudent');const results=document.getElementById('participantResults');const empty=document.getElementById('participantNoMatches');const selectionText=document.getElementById('participantSelectionText');const submit=document.getElementById('addParticipantSubmit');if(!dialog||!form)return;const options=[...results.querySelectorAll('.student-search-option')];search.addEventListener('input',()=>{const query=search.value.trim().toLocaleLowerCase();let count=0;for(const option of options){const match=option.dataset.search.includes(query);option.hidden=!match;if(match)count++}if(empty)empty.hidden=count>0});options.forEach(option=>option.addEventListener('click',()=>{options.forEach(item=>{item.classList.remove('selected');item.setAttribute('aria-pressed','false')});option.classList.add('selected');option.setAttribute('aria-pressed','true');studentId.value=option.dataset.id;selectionText.textContent=option.querySelector('.picker-student-info strong').textContent+' · '+option.querySelector('.picker-student-info small').textContent;submit.disabled=false}));dialog.addEventListener('close',()=>{search.value='';search.dispatchEvent(new Event('input'));options.forEach(item=>{item.classList.remove('selected');item.setAttribute('aria-pressed','false')});studentId.value='';selectionText.textContent='Select a student from the list';submit.disabled=true});form.addEventListener('submit',event=>{if(!studentId.value){event.preventDefault();search.focus()}})})();</script>{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  // Bulk selection handling
+  const dialog=document.getElementById('bulkParticipants');
+  const form=document.getElementById('bulkParticipantForm');
+  if(dialog && form){
+    const search=document.getElementById('bulkStudentSearch');
+    const rows=[...form.querySelectorAll('.bulk-student-option')];
+    const boxes=rows.map(row=>row.querySelector('input[type=checkbox]'));
+    const count=document.getElementById('bulkSelectionCount');
+    const summary=document.getElementById('bulkSelectionSummary');
+    const submit=document.getElementById('bulkParticipantSubmit');
+    const noMatches=document.getElementById('bulkStudentNoMatches');
+    function update(){
+      const checked=boxes.filter(box=>box.checked).length;
+      count.textContent=checked+' selected';
+      summary.textContent=checked?checked+' candidate'+(checked===1?'':'s')+' will be added. Attendance will remain unchanged.':'Select candidates above to add them together.';
+      submit.disabled=checked===0;
+    }
+    if(search){
+      search.addEventListener('input',()=>{
+        const query=search.value.trim().toLocaleLowerCase();
+        let visible=0;
+        for(const row of rows){
+          const matches=row.dataset.search.includes(query);
+          row.hidden=!matches;
+          if(matches)visible++;
+        }
+        if(noMatches)noMatches.hidden=visible>0;
+      });
+    }
+    boxes.forEach(box=>box.addEventListener('change',update));
+    const btnVisible=document.getElementById('bulkSelectVisible');
+    if(btnVisible){
+      btnVisible.addEventListener('click',()=>{
+        rows.forEach((row,index)=>{if(!row.hidden)boxes[index].checked=true;});
+        update();
+      });
+    }
+    const btnClear=document.getElementById('bulkClearSelection');
+    if(btnClear){
+      btnClear.addEventListener('click',()=>{
+        boxes.forEach(box=>box.checked=false);
+        update();
+      });
+    }
+    form.addEventListener('submit',event=>{
+      if(!boxes.some(box=>box.checked)){event.preventDefault();search.focus();}
+    });
+    dialog.addEventListener('close',()=>{
+      if(search){ search.value=''; search.dispatchEvent(new Event('input')); }
+      boxes.forEach(box=>box.checked=false);
+      update();
+    });
+  }
+
+  // Single participant handling
+  const singleDialog=document.getElementById('addParticipant');
+  const singleForm=document.getElementById('participantForm');
+  if(singleDialog && singleForm){
+    const sSearch=document.getElementById('participantSearch');
+    const studentId=document.getElementById('participantStudent');
+    const results=document.getElementById('participantResults');
+    const empty=document.getElementById('participantNoMatches');
+    const selectionText=document.getElementById('participantSelectionText');
+    const singleSubmit=document.getElementById('addParticipantSubmit');
+    const options=[...results.querySelectorAll('.student-search-option')];
+    if(sSearch){
+      sSearch.addEventListener('input',()=>{
+        const query=sSearch.value.trim().toLocaleLowerCase();
+        let count=0;
+        for(const opt of options){
+          const match=opt.dataset.search.includes(query);
+          opt.hidden=!match;
+          if(match)count++;
+        }
+        if(empty)empty.hidden=count>0;
+      });
+    }
+    options.forEach(opt=>opt.addEventListener('click',()=>{
+      options.forEach(item=>{item.classList.remove('selected');item.setAttribute('aria-pressed','false');});
+      opt.classList.add('selected');
+      opt.setAttribute('aria-pressed','true');
+      studentId.value=opt.dataset.id;
+      selectionText.textContent=opt.querySelector('.picker-student-info strong').textContent+' · '+opt.querySelector('.picker-student-info small').textContent;
+      singleSubmit.disabled=false;
+    }));
+    singleDialog.addEventListener('close',()=>{
+      if(sSearch){ sSearch.value=''; sSearch.dispatchEvent(new Event('input')); }
+      options.forEach(item=>{item.classList.remove('selected');item.setAttribute('aria-pressed','false');});
+      studentId.value='';
+      selectionText.textContent='Select a student from the list';
+      singleSubmit.disabled=true;
+    });
+    singleForm.addEventListener('submit',event=>{
+      if(!studentId.value){event.preventDefault();sSearch.focus();}
+    });
+  }
+})();
+</script>
+{% endblock %}

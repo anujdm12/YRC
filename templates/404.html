@@ -1,1 +1,12 @@
-{% extends 'base.html' %}{% block title %}Not found{% endblock %}{% block content %}<div class="not-found"><span>404</span><h1>This page wandered off.</h1><p>The page you requested is not part of this YRC workspace.</p><a class="btn primary" href="/">Back to dashboard</a></div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Signal Lost // 404{% endblock %}
+{% block crumb %}TELEMETRY ERROR // 404{% endblock %}
+
+{% block content %}
+<div class="not-found">
+  <span>404</span>
+  <h1>Signal Disconnected.</h1>
+  <p class="subhead" style="max-width:480px;margin-bottom:20px">The telemetry coordinates you requested are outside the active Youth Red Cross command matrix.</p>
+  <a class="btn primary" href="/">Return to command dashboard <span>&rarr;</span></a>
+</div>
+{% endblock %}

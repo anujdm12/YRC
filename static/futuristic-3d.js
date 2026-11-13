@@ -21,9 +21,6 @@
     let progressTimer = null;
 
     function start() {
-      const pageLoader = document.getElementById('pageLoader');
-      if (pageLoader && pageLoader.getAttribute('aria-hidden') === 'false') return;
-
       if (progressTimer) clearInterval(progressTimer);
       bar.classList.remove('done');
       bar.classList.add('active');

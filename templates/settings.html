@@ -1,1 +1,55 @@
-{% extends 'base.html' %}{% block title %}Settings{% endblock %}{% block crumb %}SETTINGS{% endblock %}{% block content %}<div class="page-heading"><div><div class="eyebrow">WORKSPACE PREFERENCES</div><h1>Settings</h1><p class="subhead">Configure your YRC admin workspace.</p></div></div><section class="panel settings-card"><div class="panel-head"><div><h2>Administrator access</h2><p>Secure access is limited to authenticated administrators.</p></div><span class="badge active">Protected</span></div><div class="settings-row"><div><b>Signed in as</b><small>{{session.get('username')}}</small></div><form method="post" action="/logout"><input type="hidden" name="_csrf_token" value="{{ csrf_token }}"><button class="btn secondary small">Sign out</button></form></div><div class="settings-row"><div><b>Fair selection</b><small>Recommendations rank active students by events attended and time since last attendance.</small></div><span class="setting-tag">ENABLED</span></div></section><div class="settings-note"><span>ⓘ</span><p>Use <code>flask --app app create-admin</code> for a new database, and set a stable <code>SECRET_KEY</code> before deployment.</p></div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Settings{% endblock %}
+{% block crumb %}SYSTEM SETTINGS // SECURITY{% endblock %}
+
+{% block content %}
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">SYSTEM CONFIGURATION // SECURITY NODE</div>
+    <h1>Settings &amp; Preferences</h1>
+    <p class="subhead">Configure your Youth Red Cross command workspace and monitor access security.</p>
+  </div>
+</div>
+
+<section class="panel settings-card">
+  <div class="panel-head">
+    <div>
+      <h2>Administrator security credentials</h2>
+      <p>Secure session limited to authorized YRC administrator nodes.</p>
+    </div>
+    <span class="badge active">ENCRYPTED // PROTECTED</span>
+  </div>
+
+  <div class="settings-row">
+    <div>
+      <b>Authenticated session identity</b>
+      <small>Active user: <span style="color:#ffffff;font-family:var(--font-mono)">{{session.get('username')}}</span> &middot; Role: Super Admin</small>
+    </div>
+    <form method="post" action="/logout">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <button class="btn secondary small">Terminate session</button>
+    </form>
+  </div>
+
+  <div class="settings-row">
+    <div>
+      <b>Fair selection algorithmic engine</b>
+      <small>Real-time recommendation ranking based on past service history and offer frequency.</small>
+    </div>
+    <span class="setting-tag" style="background:rgba(16,185,129,0.12);color:var(--emerald-core);border-color:rgba(16,185,129,0.3)">ACTIVE // OPERATIONAL</span>
+  </div>
+
+  <div class="settings-row">
+    <div>
+      <b>Database &amp; telemetry status</b>
+      <small>Local SQLite / PostgreSQL storage engine with automated session audit logging.</small>
+    </div>
+    <span class="setting-tag">SYNCHRONIZED</span>
+  </div>
+</section>
+
+<div class="settings-note">
+  <span style="font-size:18px;color:var(--crimson-vivid)">&#9432;</span>
+  <p>To provision additional administrator nodes, use <code>flask --app app create-admin</code> and configure environment <code>SECRET_KEY</code> prior to production deployment.</p>
+</div>
+{% endblock %}

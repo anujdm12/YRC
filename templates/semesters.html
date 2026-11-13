@@ -1,4 +1,30 @@
-{% extends 'base.html' %}{% block title %}Semester Event Reports{% endblock %}{% block crumb %}SEMESTER EVENT REPORTS{% endblock %}{% block content %}
-<div class="page-heading"><div><div class="eyebrow">EVENT PARTICIPATION</div><h1>Semester event reports</h1><p class="subhead">Review event activity and attendance for each semester.</p></div><a class="btn secondary" href="{{url_for('consolidated_semester_report')}}">Consolidated report</a></div>
-<div class="semester-grid">{% for semester in semesters %}<a class="panel semester-card" href="{{ url_for('semester_detail',semester_id=semester.id) }}"><span class="eyebrow">SEMESTER {{ semester.id }}</span><h2>{{ semester.name }}</h2><p>{{ semester.academic_year or 'Academic year not set' }}</p><span class="badge {{ 'active' if semester.active else 'absent' }}">{{ 'Active' if semester.active else 'Inactive' }}</span><span class="badge {{ 'present' if semester.locked else 'pending' }}">{{ 'Finalized' if semester.locked else 'Open for configuration' }}</span><b class="text-link">View event report →</b></a>{% endfor %}</div>
+{% extends 'base.html' %}
+{% block title %}Semester Eligibility{% endblock %}
+{% block crumb %}SEMESTER &amp; ELIGIBILITY MANAGEMENT{% endblock %}
+
+{% block content %}
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">ACADEMIC PROGRESSION // COMPLIANCE</div>
+    <h1>Semester &amp; Eligibility Management</h1>
+    <p class="subhead">Configure independent eligibility criteria, monitor student progress, and finalize certified term cohorts.</p>
+  </div>
+</div>
+
+<div class="semester-grid">
+  {% for semester in semesters %}
+  <a class="panel semester-card" href="{{ url_for('semester_detail',semester_id=semester.id) }}">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <span class="eyebrow" style="margin-bottom:0">SEMESTER {{ semester.id }}</span>
+      <span class="badge {{ 'active' if semester.active else 'absent' }}">{{ 'Active' if semester.active else 'Inactive' }}</span>
+    </div>
+    <h2>{{ semester.name }}</h2>
+    <p>{{ semester.academic_year or 'Academic year not configured' }}</p>
+    <div style="margin-top:auto;display:flex;align-items:center;justify-content:space-between;padding-top:14px;border-top:1px solid var(--border-subtle)">
+      <span class="badge {{ 'present' if semester.locked else 'pending' }}">{{ 'Finalized' if semester.locked else 'Open for configuration' }}</span>
+      <b class="text-link">Manage eligibility &rarr;</b>
+    </div>
+  </a>
+  {% endfor %}
+</div>
 {% endblock %}

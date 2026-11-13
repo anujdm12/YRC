@@ -1,29 +1,286 @@
 {% extends 'base.html' %}
 {% block title %}Reports{% endblock %}
-{% block crumb %}REPORTS{% endblock %}
+{% block crumb %}ANALYTICS &amp; COMPLIANCE REPORTS{% endblock %}
+
 {% macro student_table(group, empty_message) %}
-<div class="table-scroll"><table><thead><tr><th>REGISTER NO.</th><th>STUDENT</th><th>DEPARTMENT</th><th>CLASS</th><th>SECTION</th><th>EVENTS</th><th>LAST PARTICIPATION</th></tr></thead><tbody>
-{% for r in group %}<tr><td>{{r.register_no}}</td><td class="table-title">{{r.name}}</td><td>{{r.department}}</td><td>{{r.class_name}}</td><td>{{r.section or 'Unassigned'}}</td><td>{{r.events}}</td><td>{{r.last_event or 'Never'}}</td></tr>
-{% else %}<tr><td colspan="7" class="empty-cell">{{empty_message}}</td></tr>{% endfor %}
-</tbody></table></div>
+<div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>REGISTER NO.</th>
+        <th>STUDENT</th>
+        <th>DEPARTMENT</th>
+        <th>CLASS</th>
+        <th>SECTION</th>
+        <th>EVENTS</th>
+        <th>LAST PARTICIPATION</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in group %}
+      <tr>
+        <td><span style="font-family:var(--font-mono);font-size:12px">{{r.register_no}}</span></td>
+        <td class="table-title">{{r.name}}</td>
+        <td>{{r.department}}</td>
+        <td>{{r.class_name}}</td>
+        <td>{{r.section or 'Unassigned'}}</td>
+        <td><b style="font-family:var(--font-mono);color:var(--amber-core)">{{r.events}}</b></td>
+        <td><span style="font-family:var(--font-mono);font-size:11.5px;color:var(--text-muted)">{{r.last_event or 'Never'}}</span></td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="7" class="empty-cell">{{empty_message}}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endmacro %}
+
 {% block content %}
-<div class="page-heading"><div><div class="eyebrow">STUDENT PARTICIPATION</div><h1>Reports</h1><p class="subhead">Review credit eligibility by department and each student’s attendance history.</p></div></div>
-
-<section class="panel"><form class="filter-bar" method="get"><label>Student batch<select name="cohort"><option value="">All batches</option>{% for c in cohorts %}<option value="{{c}}" {{'selected' if cohort_filter==c}}>{{c}}</option>{% endfor %}</select></label><button class="btn primary">View batch report</button><a class="btn secondary" href="/reports">Clear</a></form></section>
-
-<div class="stats-grid reports-priority-summary">
-<article class="stat-card summary-card"><span class="stat-label">NOT ELIGIBLE · ALL DEPARTMENTS</span><strong>{{not_credit_eligible|length}}</strong><span class="stat-foot">Active students with 0–2 events attended</span></article>
-{% for department in department_counts %}<article class="stat-card department-stat"><span class="stat-label">{{department.name}}</span><strong>{{department.count}}</strong><span class="stat-foot">Not eligible · 0–2 events attended</span></article>{% endfor %}
-<article class="stat-card summary-card"><span class="stat-label">ELIGIBLE FOR CREDITS</span><strong>{{credit_eligible|length}}</strong><span class="stat-foot">Active students with 3+ events attended</span></article>
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">DATA INTELLIGENCE // COMPLIANCE</div>
+    <h1>Reports &amp; Analytics</h1>
+    <p class="subhead">Audit attendance records, verify threshold progress, and award accredited semester credit points.</p>
+  </div>
 </div>
 
-<section class="panel report-priority high-priority"><div class="panel-head"><div><h2>1. Students not eligible for credits</h2><p>Active students with 0–2 recorded event attendances.</p></div><div class="heading-actions"><span class="count-pill">{{not_credit_eligible|length}} students</span><a class="btn primary small" href="{{ url_for('priority_students_csv') }}">Download CSV</a></div></div>{{student_table(not_credit_eligible, 'No active students fall below the 3-event threshold.')}}</section>
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Filter attendance and credit dataset</h2>
+      <p>Filter by cohort batch and academic semester to isolate certified credit evaluations.</p>
+    </div>
+  </div>
+  <form class="filter-bar" method="get" style="margin-bottom:0">
+    <label>Semester
+      <select name="semester">
+        <option value="All" {{'selected' if semester_filter=='All'}}>All semesters</option>
+        {% for semester_number in range(1,5) %}
+        <option value="{{semester_number}}" {{'selected' if semester_filter==(semester_number|string)}}>Semester {{semester_number}}</option>
+        {% endfor %}
+        <option value="Unassigned" {{'selected' if semester_filter=='Unassigned'}}>Historical / unassigned</option>
+      </select>
+    </label>
+    <label>Student batch
+      <select name="cohort">
+        <option value="">All batches</option>
+        {% for c in cohorts %}
+        <option value="{{c}}" {{'selected' if cohort_filter==c}}>{{c}}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="btn primary">View report</button>
+  </form>
+</section>
 
-<section class="panel report-priority"><div class="panel-head"><div><h2>2. Students eligible for credits</h2><p>Active students with 3 or more recorded event attendances.</p></div><div class="heading-actions"><span class="count-pill">{{credit_eligible|length}} students</span><a class="btn primary small" href="{{ url_for('attended_students_csv') }}">Download CSV</a></div></div>
-<div class="table-scroll"><table><thead><tr><th>REGISTER NO.</th><th>STUDENT</th><th>DEPARTMENT</th><th>CLASS</th><th>SECTION</th><th>EVENTS ATTENDED</th><th>EVENTS</th></tr></thead><tbody>
-{% for r in credit_eligible %}<tr><td>{{r.register_no}}</td><td class="table-title">{{r.name}}</td><td>{{r.department}}</td><td>{{r.class_name}}</td><td>{{r.section or 'Unassigned'}}</td><td>{{r.events}}</td><td>{{r.event_names}}</td></tr>{% else %}<tr><td colspan="7" class="empty-cell">No active students have attended 3 or more events yet.</td></tr>{% endfor %}
-</tbody></table></div></section>
+<div class="stats-grid reports-priority-summary" style="margin-top:20px">
+  <article class="stat-card summary-card">
+    <div class="stat-top">
+      <span>Below event threshold{% if semester_filter in ['1','2','3','4'] %} &middot; Sem {{semester_filter}}{% endif %}</span>
+      <span class="stat-icon red">&#9696;</span>
+    </div>
+    <strong style="color:var(--crimson-vivid)">{{below_event_threshold|length}}</strong>
+    <span class="stat-foot">0–2 events attended in this scope</span>
+  </article>
 
-<section class="panel reports-events"><div class="panel-head"><div><h2>Event attendance report</h2><p>Selected volunteers and recorded attendance by activity</p></div></div><div class="table-scroll"><table><thead><tr><th>EVENT</th><th>DATE</th><th>SELECTED</th><th>PRESENT</th><th>ABSENT</th></tr></thead><tbody>{% for e in events %}<tr><td class="table-title">{{e.name}}</td><td>{{e.event_date}}</td><td>{{e.selected}}</td><td><span class="badge present">{{e.present}}</span></td><td>{{e.absent}}</td></tr>{% else %}<tr><td colspan="5" class="empty-cell">No event attendance to report yet.</td></tr>{% endfor %}</tbody></table></div></section>
+  {% for department in department_counts %}
+  <article class="stat-card department-stat">
+    <div class="stat-top">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{department.name}}</span>
+      <span class="stat-icon amber">&#9635;</span>
+    </div>
+    <strong style="color:var(--amber-core)">{{department.count}}</strong>
+    <span class="stat-foot">Below 3-event threshold</span>
+  </article>
+  {% endfor %}
+
+  <article class="stat-card summary-card">
+    <div class="stat-top">
+      <span>Event threshold satisfied</span>
+      <span class="stat-icon green">&#10003;</span>
+    </div>
+    <strong style="color:var(--emerald-core)">{{event_threshold_met|length}}</strong>
+    <span class="stat-foot">At least 3 verified check-ins</span>
+  </article>
+</div>
+
+<section class="panel report-priority high-priority" style="margin-top:20px">
+  <div class="panel-head">
+    <div>
+      <h2>1. Volunteers below 3-event threshold</h2>
+      <p>Candidates currently needing additional events to meet baseline eligibility criteria.</p>
+    </div>
+    <div class="heading-actions">
+      <span class="count-pill">{{below_event_threshold|length}} students</span>
+      <a class="btn primary small" href="{{ url_for('priority_students_csv',semester=semester_filter) }}">&#8595; Download CSV</a>
+    </div>
+  </div>
+  {{student_table(below_event_threshold, 'No active students fall below the 3-event threshold in this selection.')}}
+</section>
+
+<section class="panel report-priority" style="margin-top:20px">
+  <div class="panel-head">
+    <div>
+      <h2>2. Volunteers meeting event threshold</h2>
+      <p>Candidates with 3 or more verified event attendances qualifying for clearance.</p>
+    </div>
+    <div class="heading-actions">
+      <span class="count-pill">{{event_threshold_met|length}} students</span>
+      <a class="btn primary small" href="{{ url_for('attended_students_csv',semester=semester_filter) }}">&#8595; Download CSV</a>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>REGISTER NO.</th>
+          <th>STUDENT</th>
+          <th>DEPARTMENT</th>
+          <th>CLASS</th>
+          <th>SECTION</th>
+          <th>EVENTS ATTENDED</th>
+          <th>EVENTS COMPLETED</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in event_threshold_met %}
+        <tr>
+          <td><span style="font-family:var(--font-mono);font-size:12px">{{r.register_no}}</span></td>
+          <td class="table-title">{{r.name}}</td>
+          <td>{{r.department}}</td>
+          <td>{{r.class_name}}</td>
+          <td>{{r.section or 'Unassigned'}}</td>
+          <td><b style="font-family:var(--font-mono);color:var(--emerald-core)">{{r.events}}</b></td>
+          <td><small style="color:var(--text-muted);font-size:11.5px">{{r.event_names}}</small></td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="empty-cell">No active students have attended 3 or more events yet in this selection.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel reports-events" style="margin-top:20px">
+  <div class="panel-head">
+    <div>
+      <h2>Event attendance breakdown</h2>
+      <p>Selected candidate quotas versus recorded check-ins per activity</p>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>EVENT</th>
+          <th>SEMESTER</th>
+          <th>DATE</th>
+          <th>SELECTED</th>
+          <th>PRESENT</th>
+          <th>ABSENT</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in events %}
+        <tr>
+          <td class="table-title">{{e.name}}</td>
+          <td>{{'Semester ' ~ e.semester if e.semester else 'Unassigned'}}</td>
+          <td><span style="font-family:var(--font-mono);font-size:12px">{{e.event_date}}</span></td>
+          <td><b style="font-family:var(--font-mono)">{{e.selected}}</b></td>
+          <td><span class="badge present">{{e.present}}</span></td>
+          <td><span class="badge absent">{{e.absent}}</span></td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="empty-cell">No event attendance logs to report yet.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel report-priority" style="margin-top:20px">
+  <div class="panel-head">
+    <div>
+      <h2>Semester credit point records</h2>
+      <p>Enter certified whole-number credit points for verified attendee check-ins.</p>
+    </div>
+    <span class="count-pill">{{credit_rows|length}} attendance records</span>
+  </div>
+
+  <h3 style="font-size:15px;margin:16px 0 10px;color:var(--text-secondary)">Credit totals by student</h3>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>ROLL NUMBER</th>
+          <th>STUDENT</th>
+          <th>DEPARTMENT</th>
+          <th>EVENTS PRESENT</th>
+          <th>TOTAL CREDITS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for student in credit_totals %}
+        <tr>
+          <td><span style="font-family:var(--font-mono);font-size:12px">{{student.register_no}}</span></td>
+          <td class="table-title">{{student.name}}</td>
+          <td>{{student.department}}</td>
+          <td><b style="font-family:var(--font-mono)">{{student.events}}</b></td>
+          <td><b style="font-family:var(--font-mono);color:var(--crimson-vivid);font-size:15px">{{student.credits}}</b></td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty-cell">No present attendance records found in this semester selection.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="font-size:15px;margin:24px 0 10px;color:var(--text-secondary)">Mark credits per event</h3>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>SEMESTER</th>
+          <th>EVENT</th>
+          <th>DATE</th>
+          <th>STUDENT</th>
+          <th>ROLL NUMBER</th>
+          <th>CREDIT POINTS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in credit_rows %}
+        <tr>
+          <td>{{'Semester ' ~ record.semester if record.semester else 'Unassigned'}}</td>
+          <td class="table-title">{{record.event_name}}</td>
+          <td><span style="font-family:var(--font-mono);font-size:12px">{{record.event_date}}</span></td>
+          <td>{{record.name}}</td>
+          <td><span style="font-family:var(--font-mono);font-size:12px">{{record.register_no}}</span></td>
+          <td>
+            <form class="inline-actions" method="post" action="{{url_for('update_attendance_credit',attendance_id=record.attendance_id)}}">
+              <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+              <input type="hidden" name="semester" value="{{semester_filter}}">
+              <input type="hidden" name="cohort" value="{{cohort_filter}}">
+              <input type="number" name="credit_points" min="0" step="1" value="{{record.credit_points}}" required aria-label="Credit points for {{record.name}} at {{record.event_name}}" style="width:80px;min-height:34px;padding:4px 8px;font-family:var(--font-mono)">
+              <button class="btn secondary small">Save</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="empty-cell">No present attendance records in this semester selection.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}

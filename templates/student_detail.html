@@ -1,6 +1,163 @@
-{% extends 'base.html' %}{% block title %}{{student.name}}{% endblock %}{% block crumb %}<a href="/students">STUDENTS</a> / PROFILE{% endblock %}{% block content %}
-<div class="backline"><a href="/students">&larr; Student directory</a></div><div class="page-heading"><div><div class="eyebrow">VOLUNTEER PROFILE</div><h1>{{student.name}}</h1><p class="subhead">{{student.register_no}} · {{student.department}} · {{student.class_name}}</p></div><span class="badge {{student.yrc_status|lower}}">{{student.yrc_status}}</span></div>
-<section class="panel"><div class="panel-head"><div><h2>Semester event activity</h2><p>Shows participation in eligible events by semester.</p></div></div><div class="semester-grid">{% for item in semester_progress %}<article class="panel semester-card"><span class="eyebrow">{{ item.semester.name }}</span><h2>{{ item.result.status|replace('_',' ') }}</h2><p>Activities: {{ item.result.activities }} / {{ item.result.minimum }}</p><small>{{ item.result.reasons|join(' ') }}</small></article>{% endfor %}</div></section><div class="stats-grid profile-stats"><article class="stat-card"><div class="stat-top"><span>Events attended</span></div><strong>{{student.events}}</strong><small>verified present records</small></article><article class="stat-card"><div class="stat-top"><span>Last participation</span></div><strong class="date-stat">{{student.last_event or 'Never'}}</strong><small>most recent event</small></article><article class="stat-card"><div class="stat-top"><span>Participation rate</span></div><strong>{{((student.events * 100 / student.total_events)|round|int) if student.total_events else 0}}%</strong><small>of completed YRC events</small></article></div>
-<section class="panel"><div class="panel-head"><div><h2>Participation history</h2><p>Attendance and credit records for this student</p></div><span class="count-pill">{{history|length}} records</span></div><div class="table-scroll"><table><thead><tr><th>EVENT</th><th>DATE</th><th>SEMESTER</th><th>ACADEMIC YEAR</th><th>ACTIVITY</th><th>ATTENDANCE</th><th>CREDIT POINTS</th></tr></thead><tbody>{% for h in history %}<tr><td class="table-title">{{h.name}}</td><td>{{h.event_date}}</td><td>{{'Semester ' ~ h.semester if h.semester else 'Unassigned'}}</td><td>{{h.academic_year or 'Needs review'}}</td><td>{{h.activity_category or '—'}}</td><td><span class="badge {{h.status|lower}}">{{h.status}}</span></td><td>{{h.credit_points}}</td></tr>{% else %}<tr><td colspan="7" class="empty-cell">No attendance history recorded for this student.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="panel"><div class="panel-head"><div><h2>Student details</h2><p>Update volunteer directory information.</p></div></div><form class="student-details-form" method="post" action="/students/{{student.id}}/edit"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><div class="form-grid"><label>Batch / intake<input name="cohort" value="{{student.cohort}}" required></label><label>Register number<input name="register_no" value="{{student.register_no}}" required></label><label>Full name<input name="name" value="{{student.name}}" required></label><label>Department<input name="department" value="{{student.department}}" required></label><label>Class / programme<input name="class_name" value="{{student.class_name}}" required></label><label>Section<input name="section" value="{{student.section}}"></label><label>Year<input name="year" type="number" min="1" max="8" value="{{student.year}}" required></label><label>Email<input name="email" value="{{student.email or ''}}"></label><label>Phone<input name="phone" value="{{student.phone or ''}}"></label></div><div class="modal-actions"><button class="btn primary" type="submit">Save student details</button></div></form></section>
+{% extends 'base.html' %}
+{% block title %}{{student.name}}{% endblock %}
+{% block crumb %}<a href="/students">STUDENTS</a> / PROFILE // {{ student.register_no }}{% endblock %}
+
+{% block content %}
+<div class="backline">
+  <a class="text-link" href="/students">&larr; Return to student directory</a>
+</div>
+
+<div class="page-heading" style="margin-top:14px">
+  <div>
+    <div class="eyebrow">VOLUNTEER DOSSIER // {{student.cohort}}</div>
+    <h1>{{student.name}}</h1>
+    <p class="subhead">{{student.register_no}} &middot; {{student.department}} &middot; {{student.class_name}}{% if student.section %} &middot; Section {{student.section}}{% endif %}</p>
+  </div>
+  <span class="badge {{student.yrc_status|lower}}">{{student.yrc_status}}</span>
+</div>
+
+<section class="panel" style="margin-bottom:16px">
+  <div class="panel-head" style="align-items:center;gap:16px;flex-wrap:wrap">
+    <div><h2>Student portal access</h2><p>Issue or reset this student's private YRC login. Their register number is their student ID.</p></div>
+    <form method="post" action="/students/{{student.id}}/credentials">
+      <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+      <button class="btn {{ 'secondary' if has_student_account else 'primary' }}" type="submit" data-confirm="{{ 'Reset this student’s portal password?' if has_student_account else 'Create student portal access and generate a password?' }}">{{ '↻ Reset password' if has_student_account else '＋ Issue login credentials' }}</button>
+    </form>
+  </div>
+  {% if issued_credential %}<div style="margin-top:12px;padding:14px;border:1px solid #d6e9d9;border-radius:10px;background:#f3faf4;color:#31593a">
+    <b>Share these credentials with the student now. The password is shown only once.</b>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:9px;font-family:var(--font-mono);font-size:12px"><span>Student ID: <strong>{{issued_credential.username}}</strong></span><span>Password: <strong>{{issued_credential.password}}</strong></span></div>
+    <p style="margin:8px 0 0;font-size:10px">Students can change their password after signing in at <b>/volunteer</b>.</p>
+  </div>{% elif has_student_account %}<p style="margin:0;color:var(--text-muted);font-size:10px">Portal account is active. Reset the password to issue a new one; the current password cannot be viewed.</p>{% else %}<p style="margin:0;color:var(--text-muted);font-size:10px">No portal account yet. Create one to generate a password for this student.</p>{% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Semester eligibility matrix</h2>
+      <p>Progress calculated from eligible activities completed across academic terms</p>
+    </div>
+  </div>
+  <div class="semester-grid">
+    {% for item in semester_progress %}
+    <article class="panel semester-card">
+      <span class="eyebrow">{{ item.semester.name }}</span>
+      <h2>{{ item.result.status|replace('_',' ') }}</h2>
+      <p>Verified Activities: <b>{{ item.result.activities }} / {{ item.result.minimum }}</b></p>
+      <small style="color:var(--text-muted);font-size:11.5px">{{ item.result.reasons|join(' ') }}</small>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<div class="stats-grid profile-stats">
+  <article class="stat-card">
+    <div class="stat-top">
+      <span>Events attended</span>
+      <span class="stat-icon green">&#10003;</span>
+    </div>
+    <strong>{{student.events}}</strong>
+    <small>verified present attendance records</small>
+  </article>
+
+  <article class="stat-card">
+    <div class="stat-top">
+      <span>Last participation</span>
+      <span class="stat-icon blue">&#9635;</span>
+    </div>
+    <strong class="date-stat" style="font-size:clamp(22px,2.2vw,28px)">{{student.last_event or 'Never'}}</strong>
+    <small>most recent activity check-in</small>
+  </article>
+
+  <article class="stat-card">
+    <div class="stat-top">
+      <span>Participation rate</span>
+      <span class="stat-icon amber">&#9672;</span>
+    </div>
+    <strong>{{((student.events * 100 / student.total_events)|round|int) if student.total_events else 0}}%</strong>
+    <small>of all completed YRC events</small>
+  </article>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Participation &amp; credit history</h2>
+      <p>Full audit trail of attendance and academic credits</p>
+    </div>
+    <span class="count-pill">{{history|length}} records logged</span>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>EVENT</th>
+          <th>DATE</th>
+          <th>SEMESTER</th>
+          <th>ATTENDANCE STATUS</th>
+          <th>CREDIT POINTS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in history %}
+        <tr>
+          <td class="table-title">{{h.name}}</td>
+          <td><span style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted)">{{h.event_date}}</span></td>
+          <td>{{'Semester ' ~ h.semester if h.semester else 'Unassigned'}}</td>
+          <td><span class="badge {{h.status|lower}}">{{h.status}}</span></td>
+          <td><b style="font-family:var(--font-mono);color:var(--crimson-vivid)">{{h.credit_points}}</b></td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty-cell">No attendance history recorded for this student.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Update student profile</h2>
+      <p>Modify volunteer enrolment records and directory information</p>
+    </div>
+  </div>
+  <form class="student-details-form" method="post" action="/students/{{student.id}}/edit">
+    <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+    <div class="form-grid">
+      <label>Batch / intake
+        <input name="cohort" value="{{student.cohort}}" required>
+      </label>
+      <label>Register number
+        <input name="register_no" value="{{student.register_no}}" required>
+      </label>
+      <label>Full name
+        <input name="name" value="{{student.name}}" required>
+      </label>
+      <label>Department
+        <input name="department" value="{{student.department}}" required>
+      </label>
+      <label>Class / programme
+        <input name="class_name" value="{{student.class_name}}" required>
+      </label>
+      <label>Section
+        <input name="section" value="{{student.section}}">
+      </label>
+      <label>Year
+        <input name="year" type="number" min="1" max="8" value="{{student.year}}" required>
+      </label>
+      <label>Email
+        <input type="email" name="email" value="{{student.email or ''}}" placeholder="student@college.edu">
+      </label>
+      <label>Phone
+        <input name="phone" value="{{student.phone or ''}}" placeholder="+91 ...">
+      </label>
+    </div>
+    <div class="modal-actions" style="margin-top:20px">
+      <button class="btn primary" type="submit">Save student details</button>
+    </div>
+  </form>
+</section>
 {% endblock %}

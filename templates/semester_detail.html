@@ -1,13 +1,184 @@
 {% extends 'base.html' %}
-{% block title %}{{ semester.name }} Events{% endblock %}
-{% block crumb %}SEMESTER {{ semester.id }} EVENTS{% endblock %}
+{% block title %}{{ semester.name }} Eligibility{% endblock %}
+{% block crumb %}SEMESTER {{ semester.id }} ELIGIBILITY AUDIT{% endblock %}
+
 {% block content %}
-<div class="page-heading"><div><div class="eyebrow">SEMESTER {{ semester.id }} · EVENT ACTIVITY</div><h1>{{ semester.name }}</h1><p class="subhead">Manage the events assigned to this semester and review attendance based on event activity.</p></div><div class="heading-actions"><a class="btn secondary" href="{{ url_for('semester_list') }}">All semesters</a><form method="post"><input type="hidden" name="_csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="semester"><button class="btn {{ 'secondary' if semester.locked else 'primary' }}" data-confirm="{{ 'Reopen this semester?' if semester.locked else 'Finalize this semester?' }}">{{ 'Reopen semester' if semester.locked else 'Finalize semester' }}</button></form></div></div>
-<section class="panel"><div class="panel-head"><div><h2>Report filters</h2><p>Choose a year, department, class, event or student name.</p></div></div><form method="get" class="filter-bar"><label>Academic year<select name="academic_year"><option value="">All years</option>{% for y in academic_years %}<option value="{{ y }}" {{ 'selected' if academic_year==y }}>{{ y }}</option>{% endfor %}</select></label><label>Department<select name="department"><option value="">All departments</option>{% for x in departments %}<option value="{{ x.department }}" {{ 'selected' if department_filter==x.department }}>{{ x.department }}</option>{% endfor %}</select></label><label>Class<select name="class_name"><option value="">All classes</option>{% for x in classes %}<option value="{{ x.class_name }}" {{ 'selected' if class_filter==x.class_name }}>{{ x.class_name }}</option>{% endfor %}</select></label><label>Event<select name="event_id"><option value="">All events</option>{% for e in semester_events %}<option value="{{ e.id }}" {{ 'selected' if event_filter==(e.id|string) }}>{{ e.name }} · {{ e.event_date }}</option>{% endfor %}</select></label><label>Student search<input type="search" name="q" value="{{ search }}" placeholder="Name or roll number"></label><button class="btn secondary">Apply filters</button><a class="filter-clear" href="{{ url_for('semester_detail',semester_id=semester.id) }}">Clear</a></form></section>
-<div class="stats-grid"><article class="stat-card"><span class="stat-label">TOTAL STUDENTS</span><strong>{{ total_students }}</strong></article><article class="stat-card"><span class="stat-label">ASSIGNED EVENTS</span><strong>{{ total_events }}</strong></article><article class="stat-card"><span class="stat-label">ELIGIBLE</span><strong>{{ counts.ELIGIBLE }}</strong></article><article class="stat-card"><span class="stat-label">NOT ELIGIBLE</span><strong>{{ counts.NOT_ELIGIBLE + counts.INCOMPLETE_RECORDS + counts.CRITERIA_NOT_CONFIGURED }}</strong></article></div>
-<section class="panel"><div class="panel-head"><div><h2>Semester events{% if academic_year %} · {{ academic_year }}{% endif %}</h2><p>Events assigned to this semester and selected year.</p></div><span class="count-pill">{{ semester_events|length }} events</span></div><div class="table-scroll"><table><thead><tr><th>EVENT</th><th>DATE</th><th>ACADEMIC YEAR</th><th>CATEGORY</th><th>STATUS</th><th>PARTICIPANTS</th><th>PRESENT</th></tr></thead><tbody>{% for e in semester_events %}<tr><td><a class="table-title" href="{{ url_for('event_detail',eid=e.id) }}">{{ e.name }}</a></td><td>{{ e.event_date }}</td><td>{{ e.academic_year or 'Needs review' }}</td><td>{{ e.activity_category or '—' }}</td><td>{{ e.status }}</td><td>{{ e.participants }}</td><td>{{ e.present }}</td></tr>{% else %}<tr><td colspan="7" class="empty-cell">No events are assigned to this semester and year.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="panel"><div class="panel-head"><div><h2>Semester settings</h2><p>Manage the display name, academic year and availability.</p></div></div><form method="post" class="filter-bar"><input type="hidden" name="_csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="metadata"><label>Semester name<input name="name" maxlength="80" value="{{ semester.name }}" required></label><label>Academic year<input name="academic_year" maxlength="30" value="{{ semester.academic_year }}" placeholder="2026-2027"></label><label>Availability<select name="active"><option value="1" {{ 'selected' if semester.active }}>Active</option><option value="0" {{ 'selected' if not semester.active }}>Inactive</option></select></label><button class="btn secondary">Save semester settings</button></form></section>
-<section class="panel"><div class="panel-head"><div><h2>Event activity requirement</h2><p>Set the minimum number of completed event activities used to group students in this semester report.</p></div></div>{% if not semester.locked %}<form method="post" class="form-grid"><input type="hidden" name="_csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="rules"><label>Minimum completed activities<input type="number" min="0" max="100" name="minimum_activities" value="{{ minimum }}" required></label><div class="span-two"><button class="btn primary" data-confirm="Save this event activity requirement and recalculate the semester report?">Save activity requirement</button></div></form>{% else %}<p>This semester is finalized. Reopen it to edit the event activity requirement.</p>{% endif %}</section>
-<section class="panel"><div class="panel-head"><div><h2>1. Eligible students</h2><p>Students who met this semester’s event activity requirement.</p></div><div class="heading-actions"><span class="count-pill">{{ eligible_rows|length }} students</span><a class="btn primary small" href="{{ url_for('semester_report_csv',semester_id=semester.id,section='eligible',academic_year=academic_year,department=department_filter,class_name=class_filter,event_id=event_filter,q=search) }}">Download eligible CSV</a></div></div><div class="table-scroll"><table><thead><tr><th>STUDENT</th><th>ROLL NUMBER</th><th>DEPARTMENT</th><th>CLASS</th><th>ACTIVITIES</th><th>STATUS</th></tr></thead><tbody>{% for row in eligible_rows %}<tr><td><a class="table-title" href="{{ url_for('student_detail',sid=row.student.id) }}">{{ row.student.name }}</a></td><td>{{ row.student.register_no }}</td><td>{{ row.student.department }}</td><td>{{ row.student.class_name }}</td><td>{{ row.result.activities }} / {{ row.result.minimum }}</td><td>ELIGIBLE</td></tr>{% else %}<tr><td colspan="6" class="empty-cell">No eligible students in this selection.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="panel"><div class="panel-head"><div><h2>2. Not eligible</h2><p>Students who have not met the activity requirement or whose event criteria are not configured.</p></div><div class="heading-actions"><span class="count-pill">{{ not_eligible_rows|length }} students</span><a class="btn primary small" href="{{ url_for('semester_report_csv',semester_id=semester.id,section='not-eligible',academic_year=academic_year,department=department_filter,class_name=class_filter,event_id=event_filter,q=search) }}">Download not eligible CSV</a></div></div><div class="table-scroll"><table><thead><tr><th>STUDENT</th><th>ROLL NUMBER</th><th>DEPARTMENT</th><th>CLASS</th><th>ACTIVITIES</th><th>STATUS &amp; DETAILS</th></tr></thead><tbody>{% for row in not_eligible_rows %}<tr><td><a class="table-title" href="{{ url_for('student_detail',sid=row.student.id) }}">{{ row.student.name }}</a></td><td>{{ row.student.register_no }}</td><td>{{ row.student.department }}</td><td>{{ row.student.class_name }}</td><td>{{ row.result.activities }} / {{ row.result.minimum }}</td><td>{{ row.result.status|replace('_',' ') }}<br><small>{{ row.result.reasons|join(' ') }}</small></td></tr>{% else %}<tr><td colspan="6" class="empty-cell">No students in this selection.</td></tr>{% endfor %}</tbody></table></div></section>
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">SEMESTER {{ semester.id }} &middot; ACTIVITY COMPLIANCE</div>
+    <h1>{{ semester.name }}</h1>
+    <p class="subhead">Eligibility is calculated from verified eligible activities logged for this academic term.</p>
+  </div>
+  <div class="heading-actions">
+    <a class="btn secondary" href="{{ url_for('semester_list') }}">&larr; All semesters</a>
+    <form method="post" style="display:inline">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="action" value="semester">
+      <button class="btn {{ 'secondary' if semester.locked else 'primary' }}" data-confirm="{{ 'Reopen this semester?' if semester.locked else 'Finalize this semester? This locks rule changes.' }}">
+        {{ 'Reopen semester' if semester.locked else 'Finalize eligibility' }}
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="stats-grid">
+  <article class="stat-card">
+    <div class="stat-top">
+      <span>Eligible volunteers</span>
+      <span class="stat-icon green">&#10003;</span>
+    </div>
+    <strong style="color:var(--emerald-core)">{{ counts.ELIGIBLE }}</strong>
+    <small>met term requirements</small>
+  </article>
+
+  <article class="stat-card">
+    <div class="stat-top">
+      <span>Pending / Incomplete</span>
+      <span class="stat-icon amber">&#9696;</span>
+    </div>
+    <strong style="color:var(--amber-core)">{{ counts.NOT_ELIGIBLE + counts.INCOMPLETE_RECORDS }}</strong>
+    <small>require additional activities</small>
+  </article>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>Semester configuration</h2>
+      <p>Configure displayed nomenclature, academic term dates, and availability.</p>
+    </div>
+  </div>
+  <form method="post" class="filter-bar" style="margin-bottom:0">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="action" value="metadata">
+    <label>Semester title
+      <input name="name" maxlength="80" value="{{ semester.name }}" required>
+    </label>
+    <label>Academic year
+      <input name="academic_year" maxlength="30" value="{{ semester.academic_year }}" placeholder="2026–2027">
+    </label>
+    <label>Availability status
+      <select name="active">
+        <option value="1" {{ 'selected' if semester.active }}>Active</option>
+        <option value="0" {{ 'selected' if not semester.active }}>Inactive</option>
+      </select>
+    </label>
+    <button class="btn secondary">Save settings</button>
+  </form>
+</section>
+
+<section class="panel" style="margin-top:20px">
+  <div class="panel-head">
+    <div>
+      <h2>Eligibility criteria &amp; thresholds</h2>
+      <p>Define minimum verified eligible activities required for certified term clearance.</p>
+    </div>
+  </div>
+  {% if not semester.locked %}
+  <form method="post" class="form-grid">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="action" value="rules">
+    <label>Minimum completed eligible activities
+      <input type="number" min="0" max="100" name="minimum_activities" value="{{ minimum }}" required>
+    </label>
+    <div class="span-two">
+      <p class="subhead" style="margin-bottom:14px">
+        Current Threshold: {% if configured %}<b style="color:#ffffff">At least {{ minimum }} verified activities</b>{% else %}<span style="color:var(--amber-core)">No activity requirement configured.</span>{% endif %}
+      </p>
+      <button class="btn primary" data-confirm="Save this activity requirement and recalculate all active students for this semester?">Save and recalculate</button>
+    </div>
+  </form>
+  {% else %}
+  <p style="color:var(--amber-core);font-size:13px;padding:12px;background:rgba(255,159,28,0.1);border-radius:var(--radius-md);border:1px solid rgba(255,159,28,0.3)">
+    This semester is finalized and locked against criteria changes. Reopen the semester above to edit requirements.
+  </p>
+  {% endif %}
+</section>
+
+<section class="panel" style="margin-top:20px">
+  <div class="panel-head">
+    <div>
+      <h2>1. Eligible students roster</h2>
+      <p>Students who have satisfied all activity requirements for this semester.</p>
+    </div>
+    <div class="heading-actions">
+      <span class="count-pill">{{ eligible_rows|length }} certified</span>
+      <a class="btn primary small" href="{{ url_for('semester_report_csv',semester_id=semester.id,section='eligible') }}">&#8595; Download eligible CSV</a>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>ROLL NUMBER</th>
+          <th>STUDENT</th>
+          <th>DEPARTMENT</th>
+          <th>ACTIVITIES</th>
+          <th>STATUS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in eligible_rows %}
+        <tr>
+          <td><span style="font-family:var(--font-mono);font-size:12px">{{ row.student.register_no }}</span></td>
+          <td class="table-title">{{ row.student.name }}</td>
+          <td>{{ row.student.department }}</td>
+          <td><b style="font-family:var(--font-mono);color:var(--emerald-core)">{{ row.result.activities }} / {{ row.result.minimum }}</b></td>
+          <td><span class="badge present">ELIGIBLE</span></td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty-cell">No students have achieved full eligibility for this term yet.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel" style="margin-top:20px">
+  <div class="panel-head">
+    <div>
+      <h2>2. Pending &amp; ineligible candidates</h2>
+      <p>Students needing additional eligible activities to fulfill clearance.</p>
+    </div>
+    <div class="heading-actions">
+      <span class="count-pill">{{ not_eligible_rows|length }} pending</span>
+      <a class="btn primary small" href="{{ url_for('semester_report_csv',semester_id=semester.id,section='not-eligible') }}">&#8595; Download not eligible CSV</a>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>ROLL NUMBER</th>
+          <th>STUDENT</th>
+          <th>DEPARTMENT</th>
+          <th>ACTIVITIES</th>
+          <th>STATUS &amp; REMAINING CRITERIA</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in not_eligible_rows %}
+        <tr>
+          <td><span style="font-family:var(--font-mono);font-size:12px">{{ row.student.register_no }}</span></td>
+          <td class="table-title">{{ row.student.name }}</td>
+          <td>{{ row.student.department }}</td>
+          <td><b style="font-family:var(--font-mono)">{{ row.result.activities }} / {{ row.result.minimum }}</b></td>
+          <td>
+            <span class="badge absent">NOT ELIGIBLE</span>
+            {% if row.result.reasons %}
+            <small class="cell-sub" style="color:var(--text-muted);margin-top:4px">{{ row.result.reasons|join(' ') }}</small>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty-cell">No students in this section.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}

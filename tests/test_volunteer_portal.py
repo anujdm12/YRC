@@ -102,6 +102,7 @@ class VolunteerPortalTests(unittest.TestCase):
 
     def test_issued_password_is_hashed_and_displayed_only_in_uncached_response(self):
         password = self.issue_password()
+        self.assertEqual('KJU', password)
         with portal.app.app_context():
             account = portal.db().execute(
                 'SELECT password_hash FROM student_accounts WHERE student_id=?',
@@ -147,7 +148,8 @@ class VolunteerPortalTests(unittest.TestCase):
         old_password = self.issue_password()
         old_client, _ = self.sign_in_student(old_password)
         new_password = self.issue_password()
-        self.assertNotEqual(old_password, new_password)
+        self.assertEqual('KJU', old_password)
+        self.assertEqual('KJU', new_password)
         self.assertEqual(302, old_client.get('/volunteer/home').status_code)
 
         new_client, response = self.sign_in_student(new_password)
@@ -184,7 +186,7 @@ class VolunteerPortalTests(unittest.TestCase):
         })
         self.assertEqual(429, response.status_code)
 
-    def test_bulk_credentials_are_unique_hashed_and_displayed_once(self):
+    def test_bulk_credentials_use_shared_password_and_are_hashed(self):
         response = portal.app.test_client().get('/students/credentials/bulk')
         self.assertEqual(302, response.status_code)
 
@@ -199,7 +201,7 @@ class VolunteerPortalTests(unittest.TestCase):
         self.assertEqual('no-store, private', response.headers.get('Cache-Control'))
         passwords = re.findall(rb'<td><code>([^<]+)</code></td>', response.data)
         self.assertEqual(2, len(passwords))
-        self.assertEqual(2, len(set(passwords)))
+        self.assertEqual([b'KJU', b'KJU'], passwords)
         self.assertNotIn(passwords[0].decode(), response.headers.get('Set-Cookie', ''))
 
         with portal.app.app_context():
@@ -211,8 +213,9 @@ class VolunteerPortalTests(unittest.TestCase):
             stored_hashes = {row['register_no']:row['password_hash'] for row in accounts}
         for password in passwords:
             password = password.decode()
-            self.assertNotIn(password, (self.register_no, self.other_register_no))
+            self.assertEqual('KJU', password)
             self.assertTrue(any(check_password_hash(value, password) for value in stored_hashes.values()))
+        self.assertTrue(all(check_password_hash(value, 'KJU') for value in stored_hashes.values()))
         refreshed = self.admin_client.get('/students/credentials/bulk')
         self.assertNotIn(passwords[0].decode(), refreshed.get_data(as_text=True))
 

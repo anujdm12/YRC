@@ -584,7 +584,7 @@ def student_convenor_photo(filename):
 def issue_student_credentials(sid):
     student=db().execute('SELECT id,register_no FROM students WHERE id=?',(sid,)).fetchone()
     if not student: return 'Student not found',404
-    password=secrets.token_urlsafe(9)
+    password='KJU'
     hashed=generate_password_hash(password)
     token=secrets.token_urlsafe(32)
     db().execute('INSERT INTO student_accounts(student_id,password_hash,session_token) VALUES(?,?,?) ON CONFLICT(student_id) DO UPDATE SET password_hash=excluded.password_hash,session_token=excluded.session_token,updated_at=CURRENT_TIMESTAMP',(sid,hashed,token))
@@ -607,7 +607,7 @@ def student_credentials_bulk():
     issued_rows=[]
     try:
         for student in students:
-            password=secrets.token_urlsafe(18)
+            password='KJU'
             token=secrets.token_urlsafe(32)
             conn.execute('''INSERT INTO student_accounts(student_id,password_hash,session_token)
                 VALUES(?,?,?) ON CONFLICT(student_id) DO UPDATE SET password_hash=excluded.password_hash,

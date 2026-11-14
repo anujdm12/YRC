@@ -2455,3 +2455,9 @@ dialog.modal[open] {
     scroll-behavior: auto !important;
   }
 }
+
+/* Reading copy alignment */
+p, .subhead, .field-help, .settings-note, .event-description, .login-note {
+  text-align: justify !important;
+  text-justify: inter-word;
+}

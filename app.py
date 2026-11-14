@@ -25,10 +25,10 @@ app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 DB_PATH = os.getenv('DATABASE_PATH', 'yrc.db')
 ELIGIBILITY_EVENT_THRESHOLD = 3
 DEFAULT_STUDENT_CONVENORS = [
-    ('Saaya Rupesh','DEPARTMENT LEADER','Main Campus','LCA · MAIN CAMPUS','+91 7012303390','24bcyb59@kristujayanti.com','convenors/saaya-rupesh.jpg'),
-    ('Niranjan Das','DEPARTMENT LEADER','Main Campus','LCA · MAIN CAMPUS','+91 9072156728','24fcba38@kristujayanti.com','convenors/niranjan-das.jpg'),
-    ('Jeevan Chandapillai Koshy','DEPARTMENT LEADER','Airport Campus','LCA · AIRPORT CAMPUS','+91 6238192013','jeevankoshy57@gmail.com','convenors/jeevan-chandapillai-koshy.jpg'),
-    ('S. Vaishnavi','DEPARTMENT LEADER','Airport Campus','LCA · AIRPORT CAMPUS','+91 8123674583','24bbac57@kristujayanti.com','convenors/s-vaishnavi.jpg'),
+    ('Saaya Rupesh','DEPARTMENT LEADER','Student Coordinator','+91 7012303390','24bcyb59@kristujayanti.com','convenors/saaya-rupesh.jpg'),
+    ('Niranjan Das','DEPARTMENT LEADER','Student Coordinator','+91 9072156728','24fcba38@kristujayanti.com','convenors/niranjan-das.jpg'),
+    ('Jeevan Chandapillai Koshy','DEPARTMENT LEADER','Student Coordinator','+91 6238192013','jeevankoshy57@gmail.com','convenors/jeevan-chandapillai-koshy.jpg'),
+    ('S. Vaishnavi','DEPARTMENT LEADER','Student Coordinator','+91 8123674583','24bbac57@kristujayanti.com','convenors/s-vaishnavi.jpg'),
 ]
 
 @app.context_processor
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS semesters(id INTEGER PRIMARY KEY, name TEXT NOT NULL,
 CREATE TABLE IF NOT EXISTS semester_rules(id INTEGER PRIMARY KEY, semester_id INTEGER NOT NULL REFERENCES semesters(id) ON DELETE CASCADE, rule_type TEXT NOT NULL, value TEXT NOT NULL DEFAULT '', mandatory INTEGER NOT NULL DEFAULT 1, verification_required INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, UNIQUE(semester_id,rule_type));
 CREATE TABLE IF NOT EXISTS semester_certificates(id INTEGER PRIMARY KEY, semester_id INTEGER NOT NULL REFERENCES semesters(id), student_id INTEGER NOT NULL REFERENCES students(id), certificate_type TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'Submitted', verified_by INTEGER, verified_at TEXT DEFAULT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(semester_id,student_id,certificate_type));
 CREATE TABLE IF NOT EXISTS semester_eligibility_history(id INTEGER PRIMARY KEY, semester_id INTEGER NOT NULL REFERENCES semesters(id), student_id INTEGER NOT NULL REFERENCES students(id), status TEXT NOT NULL, reasons TEXT NOT NULL DEFAULT '', calculated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(semester_id,student_id));
-CREATE TABLE IF NOT EXISTS student_convenors(id INTEGER PRIMARY KEY, sort_order INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'STUDENT LEAD', campus TEXT NOT NULL DEFAULT '', campus_label TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '', photo_data BYTEA, active INTEGER NOT NULL DEFAULT 1, coordinator_title TEXT NOT NULL DEFAULT 'Student Coordinator', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS student_convenors(id INTEGER PRIMARY KEY, sort_order INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'STUDENT LEAD', phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '', photo_data BYTEA, active INTEGER NOT NULL DEFAULT 1, coordinator_title TEXT NOT NULL DEFAULT 'Student Coordinator', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 '''
 
 def db():
@@ -103,10 +103,12 @@ def init_db():
         conn.execute('ALTER TABLE student_convenors ADD COLUMN photo_data BYTEA')
     if 'coordinator_title' not in convenor_columns:
         conn.execute("ALTER TABLE student_convenors ADD COLUMN coordinator_title TEXT NOT NULL DEFAULT 'Student Coordinator'")
+    if {'campus', 'campus_label'} <= convenor_columns:
+        conn.execute("UPDATE student_convenors SET campus='', campus_label='' WHERE campus<>'' OR campus_label<>''")
     if not conn.execute('SELECT 1 FROM student_convenors LIMIT 1').fetchone():
         conn.executemany('''INSERT INTO student_convenors
-            (sort_order,name,role,campus,campus_label,phone,email,photo,active)
-            VALUES(?,?,?,?,?,?,?,?,1)''',
+            (sort_order,name,role,coordinator_title,phone,email,photo,active)
+            VALUES(?,?,?,?,?,?,?,1)''',
             [(index,*person) for index,person in enumerate(DEFAULT_STUDENT_CONVENORS,1)])
     for semester_number in range(1, 5):
         conn.execute('INSERT OR IGNORE INTO semesters(id,name) VALUES(?,?)', (semester_number, f'Semester {semester_number}'))

@@ -19,7 +19,7 @@
         {% else %}
         <div class="convenor-photo-placeholder" aria-hidden="true">{{ person.name[0]|upper }}</div>
         {% endif %}
-        <div class="convenor-info"><div class="convenor-tags"><span>{{ person.role }}</span></div><h3>{{ person.name }}</h3><p>{{ person.coordinator_title }}</p><div class="convenor-contact"><a href="tel:{{ person.phone|replace(' ','') }}">{{ person.phone }}</a><a href="mailto:{{ person.email }}">{{ person.email }}</a></div></div>
+        <div class="convenor-info"><div class="convenor-tags"><span>{{ person.role }}</span></div><h3>{{ person.name }}</h3><p>{{ person.coordinator_title }}{% if person.campus %} · {{ person.campus }}{% endif %}</p><div class="convenor-contact"><a href="tel:{{ person.phone|replace(' ','') }}">{{ person.phone }}</a><a href="mailto:{{ person.email }}">{{ person.email }}</a></div></div>
       </article>
       {% endfor %}
     </div>

@@ -124,6 +124,10 @@ class VolunteerPortalTests(unittest.TestCase):
         self.assertEqual(200, dashboard.status_code)
         self.assertIn(f'Own event {self.suffix}', body)
         self.assertNotIn(f'Other event {self.suffix}', body)
+        self.assertIn('class="myyrc-status not_eligible">Not eligible</i>', body)
+        self.assertIn('1 / 2 <small>activities</small>', body)
+        self.assertIn('Complete 1 more eligible activity.', body)
+        self.assertIn('class="myyrc-status incomplete_records">Incomplete records</i>', body)
         with student_client.session_transaction() as session:
             self.assertNotIn('admin_id', session)
         self.assertEqual(302, student_client.get('/students').status_code)

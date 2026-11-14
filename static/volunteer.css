@@ -18,3 +18,28 @@
 .convenor-contact a:hover{color:#50dfa5}
 @media(max-width:850px){.convenor-section{padding:19px}.convenor-grid{grid-template-columns:1fr}.convenor-card{grid-template-columns:112px minmax(0,1fr);gap:14px}.convenor-card>img{width:112px;height:138px}}
 @media(max-width:520px){.convenor-section{margin:27px 0 33px;padding:15px;border-radius:13px}.convenor-heading{align-items:flex-start}.convenor-heading h2{font-size:22px}.convenor-heading p{max-width:240px;line-height:1.5}.convenor-count{font-size:6px;padding:6px}.convenor-grid{gap:9px}.convenor-card{grid-template-columns:86px minmax(0,1fr);gap:11px;padding:10px}.convenor-card>img{width:86px;height:112px}.convenor-info h3{font-size:15px}.convenor-info>p{font-size:9px}.convenor-tags>span{font-size:6px;padding:4px 5px}.convenor-contact{padding-top:8px}.convenor-contact a{font-size:8px}}
+
+/* Keep the student service profile readable over the admin portal's dark theme. */
+body:has(.myyrc-wrap){min-width:320px;background:#f7f3f4!important;color:#30232a!important;color-scheme:light}
+body:has(.myyrc-wrap) #ambientCanvas{opacity:.18}
+body:has(.myyrc-wrap) .volunteer-main{position:relative;z-index:1;min-height:100vh;background:transparent}
+body:has(.myyrc-wrap) .vp-top{position:relative;z-index:1;margin-bottom:18px;padding:0 clamp(16px,4vw,55px);border-bottom:1px solid #eadfe2;background:rgba(255,255,255,.96);box-shadow:0 3px 14px rgba(46,20,29,.06)}
+body:has(.myyrc-wrap) .vp-top>a:first-child{color:#30232a}
+body:has(.myyrc-wrap) .vp-top b{color:#30232a}
+body:has(.myyrc-wrap) .vp-top small{color:#725d65}
+body:has(.myyrc-wrap) .vp-top-note{color:#634b54}
+body:has(.myyrc-wrap) .myyrc-wrap{color:#30232a}
+body:has(.myyrc-wrap) .myyrc-kicker{color:#76515c}
+body:has(.myyrc-wrap) .myyrc-heading h2{color:#30232a}
+body:has(.myyrc-wrap) .myyrc-heading p,
+body:has(.myyrc-wrap) .myyrc-semester p,
+body:has(.myyrc-wrap) .myyrc-footer{color:#65565c}
+body:has(.myyrc-wrap) .myyrc-semester>div>span{color:#554148}
+body:has(.myyrc-wrap) .myyrc-semester>strong{color:#30232a}
+body:has(.myyrc-wrap) .myyrc-semester>strong small{color:#65565c}
+body:has(.myyrc-wrap) .myyrc-status.incomplete_records{background:#eee8ea;color:#55464c}
+body:has(.myyrc-wrap) .myyrc-table th{color:#59474e}
+body:has(.myyrc-wrap) .myyrc-table td{color:#55454b}
+body:has(.myyrc-wrap) .myyrc-table td small{color:#65565c}
+body:has(.myyrc-wrap) .myyrc-password summary{color:#87001e}
+@media(max-width:800px){body:has(.myyrc-wrap) .vp-top{padding:0 13px}}

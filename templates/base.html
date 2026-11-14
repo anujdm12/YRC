@@ -15,7 +15,7 @@
   <link rel="stylesheet" href="{{ url_for('static',filename='cinematic.css',v='cinematic-refresh-2026') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='yrc-theme.css',v='yrc-crimson-2026-count-ui') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='futuristic.css',v='2026.2') }}">
-  {% if request.endpoint == 'volunteer_home' %}<link rel="stylesheet" href="{{ url_for('static',filename='volunteer.css',v='2026.11') }}">{% elif request.endpoint == 'convenor_management' %}<link rel="stylesheet" href="{{ url_for('static',filename='convenor-admin.css',v='2026.11') }}">{% endif %}
+  {% if request.endpoint == 'volunteer_home' %}<link rel="stylesheet" href="{{ url_for('static',filename='volunteer.css',v='2026.11.14') }}">{% elif request.endpoint == 'convenor_management' %}<link rel="stylesheet" href="{{ url_for('static',filename='convenor-admin.css',v='2026.11') }}">{% endif %}
 </head>
 <body>
   <div id="holoProgressBar" class="holo-progress-bar" aria-hidden="true"></div>
@@ -150,3 +150,4 @@
   {% block scripts %}{% endblock %}
 </body>
 </html>
+

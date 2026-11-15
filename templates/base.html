@@ -8,18 +8,18 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static',filename='app.css',v='cinematic-refresh-2026') }}">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  {% if request.endpoint not in ['volunteer_page','volunteer_home'] %}<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>{% endif %}
   <link rel="stylesheet" href="{{ url_for('static',filename='portal.css',v='cinematic-refresh-2026') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='layout.css',v='cinematic-refresh-2026') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='cinematic.css',v='cinematic-refresh-2026') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='yrc-theme.css',v='yrc-crimson-2026-count-ui') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='futuristic.css',v='2026.2') }}">
-  {% if request.endpoint == 'volunteer_home' %}<link rel="stylesheet" href="{{ url_for('static',filename='volunteer.css',v='2026.11') }}">{% elif request.endpoint == 'convenor_management' %}<link rel="stylesheet" href="{{ url_for('static',filename='convenor-admin.css',v='2026.11') }}">{% endif %}
+  {% if request.endpoint == 'volunteer_home' %}<link rel="stylesheet" href="{{ url_for('static',filename='volunteer.css',v='2026.31') }}">{% elif request.endpoint == 'convenor_management' %}<link rel="stylesheet" href="{{ url_for('static',filename='convenor-admin.css',v='2026.11') }}">{% endif %}
 </head>
-<body>
-  <div id="holoProgressBar" class="holo-progress-bar" aria-hidden="true"></div>
-  <canvas id="ambientCanvas"></canvas>
+<body class="{{ 'volunteer-interface' if request.endpoint == 'volunteer_home' else '' }}">
+  {% if request.endpoint not in ['volunteer_page','volunteer_home'] %}<div id="holoProgressBar" class="holo-progress-bar" aria-hidden="true"></div>
+  <canvas id="ambientCanvas"></canvas>{% endif %}
 
   {% if request.endpoint not in ['volunteer_page','volunteer_home'] %}<aside class="sidebar">
     <a class="brand" href="/">
@@ -138,7 +138,7 @@
     </a>
   </nav>{% endif %}
 
-  <script src="{{ url_for('static',filename='futuristic-3d.js',v='2026.2') }}"></script>
+  {% if request.endpoint not in ['volunteer_page','volunteer_home'] %}<script src="{{ url_for('static',filename='futuristic-3d.js',v='2026.2') }}"></script>{% endif %}
   <script>
     document.querySelectorAll('[data-confirm]').forEach(x => {
       x.addEventListener('click', e => {

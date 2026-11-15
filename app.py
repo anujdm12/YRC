@@ -330,7 +330,7 @@ def volunteer_page():
         if account and account['yrc_status']=='Active' and check_password_hash(account['password_hash'],password):
             db().execute('INSERT INTO login_attempts(username,attempted_at,success) VALUES(?,?,1)',(attempt_key,int(time.time())))
             db().commit()
-            session.clear(); session['student_id']=account['student_id']; session['student_name']=account['name']; session['student_session_token']=account['session_token']; session['_csrf_token']=secrets.token_urlsafe(32)
+            session.clear(); session['student_id']=account['student_id']; session['student_name']=account['name']; session['student_session_token']=account['session_token']; session['volunteer_welcome_nonce']=secrets.token_urlsafe(18); session['_csrf_token']=secrets.token_urlsafe(32)
             return redirect(url_for('volunteer_home'))
         db().execute('INSERT INTO login_attempts(username,attempted_at,success) VALUES(?,?,0)',(attempt_key,int(time.time())))
         db().commit()
@@ -341,6 +341,8 @@ def volunteer_page():
 @student_required
 def volunteer_home():
     sid=session['student_id']; conn=db()
+    if not session.get('volunteer_welcome_nonce'):
+        session['volunteer_welcome_nonce']=secrets.token_urlsafe(18)
     student=conn.execute('SELECT * FROM students WHERE id=?',(sid,)).fetchone()
     if not student or student['yrc_status']!='Active':
         session.clear(); flash('This volunteer account is inactive. Contact your YRC coordinator.','error'); return redirect(url_for('volunteer_page'))
@@ -349,7 +351,7 @@ def volunteer_home():
     student_convenors=conn.execute('SELECT * FROM student_convenors WHERE active=1 ORDER BY sort_order,id').fetchall()
     progress=[{'semester':sem,'result':semester_eligibility(sem['id'],sid)} for sem in semesters]
     conn.commit()
-    return render_template('volunteer_home.html',student=student,history=history,semester_progress=progress,student_convenors=student_convenors)
+    return render_template('volunteer_home.html',student=student,history=history,semester_progress=progress,student_convenors=student_convenors,welcome_nonce=session['volunteer_welcome_nonce'])
 
 @app.post('/volunteer/change-password')
 @student_required

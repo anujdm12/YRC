@@ -15,7 +15,7 @@
       <div class="form-grid">
         <label>Name<input name="name" maxlength="120" required></label>
         <label>Department<select name="department_id" required><option value="">Choose department</option>{% for department in departments %}<option value="{{department.id}}">{{department.name}}</option>{% endfor %}</select></label>
-        <label>Contact title<input name="coordinator_title" maxlength="80" value="Student Coordinator" required></label>
+        <label>Leadership designation<input name="coordinator_title" maxlength="80" value="Department Leader" placeholder="Department Leader or Department Secretary" required><small>Department Leader and Department Secretary contacts appear on the matching volunteer home.</small></label>
         <label>Phone<input name="phone" maxlength="40" type="tel"></label>
         <label>Email<input name="email" maxlength="160" type="email"></label>
         <label class="span-two">Photo<input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required></label>
@@ -37,7 +37,7 @@
         <div class="form-grid">
           <label>Name<input name="name" maxlength="120" value="{{person.name}}" required></label>
           <label>Department<select name="department_id" required><option value="">Choose department</option>{% for department in departments %}<option value="{{department.id}}" {{'selected' if person.department_id==department.id}}>{{department.name}}</option>{% endfor %}</select></label>
-          <label>Contact title<input name="coordinator_title" maxlength="80" value="{{person.coordinator_title}}" required></label>
+          <label>Leadership designation<input name="coordinator_title" maxlength="80" value="{{person.coordinator_title}}" placeholder="Department Leader or Department Secretary" required><small>Department Leader and Department Secretary contacts appear on the matching volunteer home.</small></label>
           <label>Phone<input name="phone" maxlength="40" type="tel" value="{{person.phone}}"></label>
           <label>Email<input name="email" maxlength="160" type="email" value="{{person.email}}"></label>
           <label>Display order<input name="sort_order" type="number" min="0" max="10000" value="{{person.sort_order}}" required></label>

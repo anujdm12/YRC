@@ -7,7 +7,7 @@
   <div>
     <div class="eyebrow">VOLUNTEER ROSTER // COMMUNITY</div>
     <h1>Students</h1>
-    <p class="subhead">Manage member telemetry, search cohorts, and verify participation history.</p>
+    <p class="subhead">Manage member telemetry, search batches, and verify participation history.</p>
   </div>
   <div class="heading-actions">
     <a class="btn secondary small" href="{{ url_for('convenor_management') }}">Manage Student Convenors</a>
@@ -32,7 +32,7 @@
     <select name="cohort" aria-label="Batch filter">
       <option value="">All batches</option>
       {% for c in cohorts %}
-      <option value="{{c}}" {{'selected' if cohort==c}}>{{c}}</option>
+      <option value="{{c}}" {{'selected' if cohort==c}}>{{c|display_batch}}</option>
       {% endfor %}
     </select>
     <select name="department" aria-label="Department filter">
@@ -92,7 +92,7 @@
             </a>
           </td>
           <td><span style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted)">{{s.register_no}}</span></td>
-          <td>{{s.cohort}}</td>
+          <td>{{s.cohort|display_batch}}</td>
           <td>{{s.department}}</td>
           <td>{{s.class_name}}</td>
           <td>{{s.section or '—'}}</td>
@@ -137,7 +137,7 @@
     </div>
     <div class="form-grid">
       <label>Batch / intake
-        <input name="cohort" required value="Current batch" placeholder="e.g. 2027 intake">
+        <input name="cohort" placeholder="Leave blank to use the configured register-number mapping">
       </label>
       <label>Register number
         <input name="register_no" required placeholder="e.g. 24BCAR001">

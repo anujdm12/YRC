@@ -298,5 +298,91 @@ class VolunteerPortalTests(unittest.TestCase):
         self.assertEqual(200,self.admin_client.get(
             photo_url).status_code)
 
+    def test_one_event_maps_to_distinct_cohort_periods_and_keeps_attendance_snapshot(self):
+        suffix=uuid.uuid4().hex[:8]
+        cohort_ids=[]; student_ids=[]; event_id=None; pending_event_id=None
+        with portal.app.app_context():
+            conn=portal.db()
+            for name,year,semester,start,end in (
+                (f'Progress 2026 {suffix}',2026,3,'2027-01-01','2027-06-30'),
+                (f'Progress 2027 {suffix}',2027,1,'2027-01-01','2027-06-30')):
+                conn.execute("INSERT INTO cohorts(name,admission_year,status) VALUES(?,?,'active')",(name,year))
+                cohort_id=conn.execute('SELECT id FROM cohorts WHERE name=?',(name,)).fetchone()['id']
+                cohort_ids.append(cohort_id)
+                conn.execute("INSERT INTO academic_periods(cohort_id,semester,name,start_date,end_date,status) VALUES(?,?,?,?,?,'active')",(cohort_id,semester,f'Semester {semester}',start,end))
+                register_no=f'{str(year)[-2:]}BCAR{suffix.upper()}'
+                conn.execute("INSERT INTO students(register_no,name,department,class_name,section,year,yrc_status,cohort,cohort_id,cohort_verification) VALUES(?,?,?,?,?,1,'Active',?,?, 'manual')",(register_no,f'Progress Volunteer {year} {suffix}','Health','BSc','A',f'Progress {year} {suffix}',cohort_id))
+                student_ids.append(conn.execute('SELECT id FROM students WHERE register_no=?',(register_no,)).fetchone()['id'])
+            conn.commit()
+        try:
+            created=self.admin_client.post('/events',data={
+                '_csrf_token':'test-token','name':f'Shared cohort event {suffix}',
+                'event_date':'2027-02-15','status':'Open','cohort_ids':[str(value) for value in cohort_ids]})
+            self.assertEqual(302,created.status_code)
+            event_id=int(created.location.rsplit('/',1)[-1])
+            with portal.app.app_context():
+                conn=portal.db()
+                mappings=conn.execute('SELECT event_id,cohort_id,academic_period_id,mapping_status FROM event_cohorts WHERE event_id=? ORDER BY cohort_id',(event_id,)).fetchall()
+                self.assertEqual(2,len(mappings))
+                self.assertTrue(all(row['event_id']==event_id and row['mapping_status']=='configured' for row in mappings))
+                semesters={row['cohort_id']:conn.execute('SELECT semester FROM academic_periods WHERE id=?',(row['academic_period_id'],)).fetchone()[0] for row in mappings}
+                self.assertEqual({cohort_ids[0]:3,cohort_ids[1]:1},semesters)
+            pending=self.admin_client.post('/events',data={
+                '_csrf_token':'test-token','name':f'Unconfigured period event {suffix}',
+                'event_date':'2028-02-15','status':'Open','cohort_ids':[str(cohort_ids[0])]})
+            self.assertEqual(302,pending.status_code)
+            pending_event_id=int(pending.location.rsplit('/',1)[-1])
+            with portal.app.app_context():
+                mapping=portal.db().execute('SELECT academic_period_id,mapping_status FROM event_cohorts WHERE event_id=?',(pending_event_id,)).fetchone()
+                self.assertIsNone(mapping['academic_period_id'])
+                self.assertEqual('pending',mapping['mapping_status'])
+            for student_id in student_ids:
+                response=self.admin_client.post(f'/events/{event_id}/select',data={'_csrf_token':'test-token','student_id':str(student_id)})
+                self.assertEqual(302,response.status_code)
+                response=self.admin_client.post(f'/events/{event_id}/attendance/{student_id}',data={'_csrf_token':'test-token','status':'Present'})
+                self.assertEqual(302,response.status_code)
+            with portal.app.app_context():
+                conn=portal.db()
+                snapshots=conn.execute('''SELECT a.event_id,a.student_id,a.academic_period_id,ap.semester
+                    FROM attendance a JOIN academic_periods ap ON ap.id=a.academic_period_id
+                    WHERE a.event_id=? ORDER BY a.student_id''',(event_id,)).fetchall()
+                self.assertEqual(2,len(snapshots))
+                self.assertEqual({event_id},{row['event_id'] for row in snapshots})
+                self.assertEqual([3,1],[row['semester'] for row in snapshots])
+                period_ids=[row['academic_period_id'] for row in snapshots]
+            # Editing a calendar must not silently move confirmed attendance history.
+            with portal.app.app_context():
+                conn=portal.db()
+                conn.execute('UPDATE academic_periods SET start_date=?,end_date=? WHERE id=?',('2027-02-01','2027-07-31',period_ids[0]))
+                conn.commit()
+                after=[row[0] for row in conn.execute('SELECT academic_period_id FROM attendance WHERE event_id=? ORDER BY student_id',(event_id,)).fetchall()]
+                self.assertEqual(period_ids,after)
+            rescheduled=self.admin_client.post(f'/events/{event_id}/reschedule',data={'_csrf_token':'test-token','event_date':'2027-08-15'})
+            self.assertEqual(302,rescheduled.status_code)
+            with portal.app.app_context():
+                conn=portal.db()
+                self.assertEqual(2,conn.execute("SELECT COUNT(*) FROM attendance WHERE event_id=? AND academic_period_id IS NULL",(event_id,)).fetchone()[0])
+                self.assertEqual(2,conn.execute("SELECT COUNT(*) FROM event_cohorts WHERE event_id=? AND mapping_status='pending'",(event_id,)).fetchone()[0])
+                self.assertEqual(1,conn.execute("SELECT COUNT(*) FROM admin_audit_logs WHERE entity_type='event' AND entity_id=? AND action LIKE 'Event rescheduled%'",(event_id,)).fetchone()[0])
+        finally:
+            with portal.app.app_context():
+                conn=portal.db()
+                if event_id:
+                    conn.execute('DELETE FROM attendance WHERE event_id=?',(event_id,))
+                    conn.execute('DELETE FROM event_participants WHERE event_id=?',(event_id,))
+                    conn.execute("DELETE FROM admin_audit_logs WHERE entity_type='event' AND entity_id=?",(event_id,))
+                    conn.execute('DELETE FROM events WHERE id=?',(event_id,))
+                if pending_event_id:
+                    conn.execute('DELETE FROM events WHERE id=?',(pending_event_id,))
+                for student_id in student_ids:
+                    conn.execute("DELETE FROM admin_audit_logs WHERE entity_type='student' AND entity_id=?",(student_id,))
+                    conn.execute('DELETE FROM students WHERE id=?',(student_id,))
+                for cohort_id in cohort_ids:
+                    conn.execute('DELETE FROM event_cohorts WHERE cohort_id=?',(cohort_id,))
+                    conn.execute('DELETE FROM academic_periods WHERE cohort_id=?',(cohort_id,))
+                    conn.execute('DELETE FROM cohort_prefix_mappings WHERE cohort_id=?',(cohort_id,))
+                    conn.execute('DELETE FROM cohorts WHERE id=?',(cohort_id,))
+                conn.commit()
+
 if __name__ == '__main__':
     unittest.main()

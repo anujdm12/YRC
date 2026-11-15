@@ -31,7 +31,7 @@
   <div>
     <div class="eyebrow">{{event.event_date}}{% if event.start_time %} &middot; {{event.start_time}}{% endif %}</div>
     <h1>{{event.name}}</h1>
-    <p class="subhead">{{event.venue or 'Venue not yet specified'}}</p>
+    <p class="subhead">{% if event.category %}{{event.category}} &middot; {% endif %}{{event.venue or 'Venue not yet specified'}}</p>
   </div>
   <span class="badge {{event.status|lower}}">{{event.status}}</span>
 </div>
@@ -40,25 +40,24 @@
 <div class="event-description">{{event.description}}</div>
 {% endif %}
 
+<form class="event-filter" method="post" action="{{url_for('event_reschedule',eid=event.id)}}" aria-label="Reschedule event">
+  <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+  <label>Event date<input type="date" name="event_date" value="{{event.event_date}}" required></label>
+  <button class="btn secondary" data-confirm="Change the event date and recalculate its batch periods? Existing snapshots will be updated and the change audited.">Save rescheduled date</button>
+</form>
+
 <div class="dashboard-grid" style="margin-bottom:20px">
   <section class="panel">
     <div class="panel-head">
       <div>
-        <h2>Semester record</h2>
-        <p>Changing the semester preserves event attendance and credit points.</p>
+        <h2>Batch academic periods</h2>
+        <p>Each participating batch uses its own calendar for this event date.</p>
       </div>
-      <span class="count-pill">{{'Semester ' ~ event.semester if event.semester else 'Historical / unassigned'}}</span>
+      <span class="count-pill">{{cohort_mappings|length}} batch mappings</span>
     </div>
-    <form class="event-filter" method="post" action="{{url_for('event_semester_update',eid=event.id)}}" style="margin-bottom:0">
-      <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
-      <select name="semester" aria-label="Assign semester">
-        <option value="" {{'selected' if not event.semester}}>Historical / unassigned</option>
-        {% for x in range(1,5) %}
-        <option value="{{x}}" {{'selected' if event.semester==x}}>Semester {{x}}</option>
-        {% endfor %}
-      </select>
-      <button class="btn secondary">Save semester</button>
-    </form>
+    {% if cohort_mappings %}<div class="table-scroll"><table><thead><tr><th>BATCH</th><th>APPLICABLE PERIOD</th><th>DATE RANGE</th><th>STATUS</th></tr></thead><tbody>
+      {% for mapping in cohort_mappings %}<tr><td>{{mapping.cohort_name|display_batch}}</td><td>{{mapping.period_name or 'Pending calendar configuration'}}{% if mapping.semester %}<small class="cell-sub">Academic year {{mapping.academic_year}} · Semester {{mapping.semester}}</small>{% endif %}</td><td>{% if mapping.start_date %}{{mapping.start_date}} to {{mapping.end_date}}{% else %}—{% endif %}</td><td><span class="badge {{'active' if mapping.mapping_status=='configured' else 'absent'}}">{{mapping.mapping_status|title}}</span></td></tr>{% endfor %}
+    </tbody></table></div>{% else %}<span class="count-pill">Legacy event: {{'Semester ' ~ event.semester if event.semester else 'historical / unassigned'}}</span>{% endif %}
   </section>
 
   <section class="panel">
@@ -194,6 +193,7 @@
         <tr>
           <th>STUDENT</th>
           <th>REGISTER NO.</th>
+          <th>BATCH PERIOD</th>
           <th>ATTENDANCE STATUS</th>
           <th>ACTIONS</th>
         </tr>
@@ -211,6 +211,7 @@
             </a>
           </td>
           <td><span style="font-family:var(--font-mono);font-size:12px">{{p.register_no}}</span></td>
+          <td>{{p.cohort|display_batch}}{% if p.participant_semester %}<small class="cell-sub">Semester {{p.participant_semester}} · {{p.participant_period_name}}</small>{% else %}<small class="cell-sub">Academic period pending</small>{% endif %}</td>
           <td>
             {% if p.attendance %}
             <span class="badge {{p.attendance|lower}}">{{p.attendance}}</span>

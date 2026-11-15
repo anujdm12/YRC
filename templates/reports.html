@@ -50,14 +50,14 @@
   <div class="panel-head">
     <div>
       <h2>Filter attendance and credit dataset</h2>
-      <p>Filter by cohort batch and academic semester to isolate certified credit evaluations.</p>
+      <p>Filter by batch and academic semester to isolate certified credit evaluations.</p>
     </div>
   </div>
   <form class="filter-bar" method="get" style="margin-bottom:0">
     <label>Semester
       <select name="semester">
         <option value="All" {{'selected' if semester_filter=='All'}}>All semesters</option>
-        {% for semester_number in range(1,5) %}
+        {% for semester_number in semester_options %}
         <option value="{{semester_number}}" {{'selected' if semester_filter==(semester_number|string)}}>Semester {{semester_number}}</option>
         {% endfor %}
         <option value="Unassigned" {{'selected' if semester_filter=='Unassigned'}}>Historical / unassigned</option>
@@ -67,7 +67,7 @@
       <select name="cohort">
         <option value="">All batches</option>
         {% for c in cohorts %}
-        <option value="{{c}}" {{'selected' if cohort_filter==c}}>{{c}}</option>
+        <option value="{{c}}" {{'selected' if cohort_filter==c}}>{{c|display_batch}}</option>
         {% endfor %}
       </select>
     </label>

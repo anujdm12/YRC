@@ -36,15 +36,24 @@ def inject_now():
     today=date.today()
     return {'now': today.strftime('%d %b %Y'), 'today_long': today.strftime('%A, %d %B %Y').upper()}
 
+@app.template_filter('display_batch')
+def display_batch(value):
+    label=str(value or '')
+    return '2026 batch' if label.strip().casefold()=='current batch' else label
+
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS admin_roles(admin_id INTEGER PRIMARY KEY REFERENCES admins(id) ON DELETE CASCADE, role TEXT NOT NULL DEFAULT 'super_admin', department TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS students(id INTEGER PRIMARY KEY, register_no TEXT UNIQUE NOT NULL, name TEXT NOT NULL, department TEXT NOT NULL, class_name TEXT NOT NULL DEFAULT '', section TEXT NOT NULL DEFAULT '', year INTEGER NOT NULL, email TEXT, phone TEXT, yrc_status TEXT NOT NULL DEFAULT 'Active', cohort TEXT NOT NULL DEFAULT 'Current batch', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS cohorts(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, admission_year INTEGER, academic_year_start TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS cohort_prefix_mappings(prefix TEXT PRIMARY KEY, cohort_id INTEGER NOT NULL REFERENCES cohorts(id), active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS academic_periods(id INTEGER PRIMARY KEY, cohort_id INTEGER NOT NULL REFERENCES cohorts(id), semester INTEGER NOT NULL, name TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(cohort_id,semester), CHECK(semester>0), CHECK(start_date<=end_date));
+CREATE TABLE IF NOT EXISTS students(id INTEGER PRIMARY KEY, register_no TEXT UNIQUE NOT NULL, name TEXT NOT NULL, department TEXT NOT NULL, class_name TEXT NOT NULL DEFAULT '', section TEXT NOT NULL DEFAULT '', year INTEGER NOT NULL, email TEXT, phone TEXT, yrc_status TEXT NOT NULL DEFAULT 'Active', cohort TEXT NOT NULL DEFAULT '2026 batch', cohort_id INTEGER REFERENCES cohorts(id), cohort_verification TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS student_accounts(id INTEGER PRIMARY KEY, student_id INTEGER UNIQUE NOT NULL REFERENCES students(id) ON DELETE CASCADE, password_hash TEXT NOT NULL, session_token TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, event_date TEXT NOT NULL, start_time TEXT, end_time TEXT, venue TEXT, max_participants INTEGER, deadline TEXT, status TEXT NOT NULL DEFAULT 'Upcoming', semester INTEGER, counts_for_eligibility INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS event_participants(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE, student_id INTEGER NOT NULL REFERENCES students(id), selection_status TEXT NOT NULL DEFAULT 'Selected', selected_at TEXT DEFAULT CURRENT_TIMESTAMP, selected_by INTEGER, UNIQUE(event_id,student_id));
+CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, event_date TEXT NOT NULL, start_time TEXT, end_time TEXT, venue TEXT, category TEXT NOT NULL DEFAULT '', max_participants INTEGER, deadline TEXT, status TEXT NOT NULL DEFAULT 'Upcoming', semester INTEGER, counts_for_eligibility INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS event_cohorts(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE, cohort_id INTEGER NOT NULL REFERENCES cohorts(id), academic_period_id INTEGER REFERENCES academic_periods(id), mapping_status TEXT NOT NULL DEFAULT 'pending', UNIQUE(event_id,cohort_id));
+CREATE TABLE IF NOT EXISTS event_participants(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE, student_id INTEGER NOT NULL REFERENCES students(id), selection_status TEXT NOT NULL DEFAULT 'Selected', selected_at TEXT DEFAULT CURRENT_TIMESTAMP, selected_by INTEGER, academic_period_id INTEGER REFERENCES academic_periods(id), UNIQUE(event_id,student_id));
 CREATE TABLE IF NOT EXISTS selection_history(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, decision TEXT NOT NULL, attended_count INTEGER NOT NULL DEFAULT 0, seat_offers INTEGER NOT NULL DEFAULT 0, priority_score INTEGER NOT NULL DEFAULT 0, tie_break TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', decided_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS attendance(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, status TEXT NOT NULL, marked_at TEXT DEFAULT CURRENT_TIMESTAMP, marked_by INTEGER, credit_points INTEGER NOT NULL DEFAULT 0, UNIQUE(event_id,student_id), FOREIGN KEY(event_id,student_id) REFERENCES event_participants(event_id,student_id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS attendance(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, student_id INTEGER NOT NULL, status TEXT NOT NULL, marked_at TEXT DEFAULT CURRENT_TIMESTAMP, marked_by INTEGER, credit_points INTEGER NOT NULL DEFAULT 0, academic_period_id INTEGER REFERENCES academic_periods(id), UNIQUE(event_id,student_id), FOREIGN KEY(event_id,student_id) REFERENCES event_participants(event_id,student_id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS login_attempts(id INTEGER PRIMARY KEY, username TEXT NOT NULL, attempted_at INTEGER NOT NULL, success INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS admin_audit_logs(id INTEGER PRIMARY KEY, admin_id INTEGER, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS participation_import_batches(id TEXT PRIMARY KEY, admin_id INTEGER NOT NULL, filename TEXT NOT NULL, response_count INTEGER NOT NULL DEFAULT 0, unique_respondents INTEGER NOT NULL DEFAULT 0, repeated_respondents INTEGER NOT NULL DEFAULT 0, missing_register_count INTEGER NOT NULL DEFAULT 0, record_count INTEGER NOT NULL DEFAULT 0, imported_count INTEGER NOT NULL DEFAULT 0, skipped_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'Preview', created_at TEXT DEFAULT CURRENT_TIMESTAMP, completed_at TEXT);
@@ -114,12 +123,47 @@ def init_db():
         conn.execute('INSERT OR IGNORE INTO semesters(id,name) VALUES(?,?)', (semester_number, f'Semester {semester_number}'))
     conn.execute("INSERT OR IGNORE INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required) VALUES(1,'minimum_activities','2',1,0)")
     student_columns = {row[1] for row in conn.execute('PRAGMA table_info(students)')}
+    cohort_columns={row[1] for row in conn.execute('PRAGMA table_info(cohorts)')}
+    if 'academic_year_start' not in cohort_columns:
+        conn.execute('ALTER TABLE cohorts ADD COLUMN academic_year_start TEXT')
     if 'class_name' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN class_name TEXT NOT NULL DEFAULT ''")
     if 'section' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN section TEXT NOT NULL DEFAULT ''")
     if 'cohort' not in student_columns:
-        conn.execute("ALTER TABLE students ADD COLUMN cohort TEXT NOT NULL DEFAULT 'Current batch'")
+        conn.execute("ALTER TABLE students ADD COLUMN cohort TEXT NOT NULL DEFAULT '2026 batch'")
+    if 'cohort_id' not in student_columns:
+        cohort_id_type='BIGINT' if USING_POSTGRES else 'INTEGER'
+        conn.execute(f'ALTER TABLE students ADD COLUMN cohort_id {cohort_id_type} REFERENCES cohorts(id)')
+    if 'cohort_verification' not in student_columns:
+        conn.execute("ALTER TABLE students ADD COLUMN cohort_verification TEXT NOT NULL DEFAULT 'pending'")
+    for cohort_row in conn.execute("SELECT DISTINCT TRIM(cohort) AS name FROM students WHERE TRIM(cohort)<>''").fetchall():
+        conn.execute("INSERT OR IGNORE INTO cohorts(name,status) VALUES(?,'active')",(cohort_row['name'],))
+    conn.execute('''UPDATE students SET cohort_id=(SELECT c.id FROM cohorts c WHERE c.name=students.cohort)
+        WHERE cohort_id IS NULL AND EXISTS(SELECT 1 FROM cohorts c WHERE c.name=students.cohort)''')
+    conn.execute('CREATE TABLE IF NOT EXISTS app_migrations(name TEXT PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)')
+    if not conn.execute("SELECT 1 FROM app_migrations WHERE name='keep_only_2026_batch_active'").fetchone():
+        legacy_batch=conn.execute("SELECT id FROM cohorts WHERE LOWER(TRIM(name))='current batch'").fetchone()
+        named_batch=conn.execute("SELECT id FROM cohorts WHERE LOWER(TRIM(name))='2026 batch'").fetchone()
+        if legacy_batch and not named_batch:
+            conn.execute("UPDATE cohorts SET name='2026 batch',admission_year=COALESCE(admission_year,2026) WHERE id=?",(legacy_batch['id'],))
+            named_batch=legacy_batch
+        if named_batch:
+            if legacy_batch and legacy_batch['id']!=named_batch['id']:
+                old_prefixes=conn.execute('SELECT prefix FROM cohort_prefix_mappings WHERE cohort_id=?',(legacy_batch['id'],)).fetchall()
+                for prefix_row in old_prefixes:
+                    conn.execute('''INSERT INTO cohort_prefix_mappings(prefix,cohort_id,active) VALUES(?,?,1)
+                        ON CONFLICT(prefix) DO UPDATE SET cohort_id=excluded.cohort_id,active=1''',(prefix_row['prefix'],named_batch['id']))
+            conn.execute("UPDATE cohorts SET status=CASE WHEN id=? THEN 'active' ELSE 'inactive' END",(named_batch['id'],))
+            conn.execute("UPDATE cohorts SET admission_year=COALESCE(admission_year,2026) WHERE id=?",(named_batch['id'],))
+            conn.execute("UPDATE students SET cohort='2026 batch',cohort_id=? WHERE LOWER(TRIM(cohort))='current batch' OR cohort_id=?",(named_batch['id'],legacy_batch['id'] if legacy_batch else -1))
+            conn.execute("UPDATE cohort_prefix_mappings SET active=CASE WHEN cohort_id=? THEN active ELSE 0 END",(named_batch['id'],))
+        conn.execute("INSERT INTO app_migrations(name) VALUES('keep_only_2026_batch_active')")
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_students_cohort_id ON students(cohort_id)')
+    period_columns={row[1] for row in conn.execute('PRAGMA table_info(event_participants)')}
+    if 'academic_period_id' not in period_columns:
+        period_id_type='BIGINT' if USING_POSTGRES else 'INTEGER'
+        conn.execute(f'ALTER TABLE event_participants ADD COLUMN academic_period_id {period_id_type} REFERENCES academic_periods(id)')
     account_columns={row[1] for row in conn.execute('PRAGMA table_info(student_accounts)')}
     if 'session_token' not in account_columns:
         conn.execute("ALTER TABLE student_accounts ADD COLUMN session_token TEXT NOT NULL DEFAULT ''")
@@ -128,11 +172,16 @@ def init_db():
     event_columns={row[1] for row in conn.execute('PRAGMA table_info(events)')}
     if 'semester' not in event_columns:
         conn.execute('ALTER TABLE events ADD COLUMN semester INTEGER')
+    if 'category' not in event_columns:
+        conn.execute("ALTER TABLE events ADD COLUMN category TEXT NOT NULL DEFAULT ''")
     if 'counts_for_eligibility' not in event_columns:
         conn.execute('ALTER TABLE events ADD COLUMN counts_for_eligibility INTEGER NOT NULL DEFAULT 1')
     attendance_columns={row[1] for row in conn.execute('PRAGMA table_info(attendance)')}
     if 'credit_points' not in attendance_columns:
         conn.execute('ALTER TABLE attendance ADD COLUMN credit_points INTEGER NOT NULL DEFAULT 0')
+    if 'academic_period_id' not in attendance_columns:
+        period_id_type='BIGINT' if USING_POSTGRES else 'INTEGER'
+        conn.execute(f'ALTER TABLE attendance ADD COLUMN academic_period_id {period_id_type} REFERENCES academic_periods(id)')
     import_row_columns={row[1] for row in conn.execute('PRAGMA table_info(participation_import_rows)')}
     if 'match_method' not in import_row_columns:
         conn.execute("ALTER TABLE participation_import_rows ADD COLUMN match_method TEXT NOT NULL DEFAULT 'register_no'")
@@ -346,7 +395,7 @@ def volunteer_home():
     student=conn.execute('SELECT * FROM students WHERE id=?',(sid,)).fetchone()
     if not student or student['yrc_status']!='Active':
         session.clear(); flash('This volunteer account is inactive. Contact your YRC coordinator.','error'); return redirect(url_for('volunteer_page'))
-    history=conn.execute("SELECT e.name,e.event_date,e.semester,e.venue,a.status,a.credit_points FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=? ORDER BY e.event_date DESC,e.id DESC",(sid,)).fetchall()
+    history=conn.execute("SELECT e.name,e.event_date,COALESCE(ap.semester,e.semester) semester,e.venue,a.status,a.credit_points FROM attendance a JOIN events e ON e.id=a.event_id LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id WHERE a.student_id=? ORDER BY e.event_date DESC,e.id DESC",(sid,)).fetchall()
     semesters=conn.execute('SELECT * FROM semesters ORDER BY id').fetchall()
     student_convenors=conn.execute('SELECT * FROM student_convenors WHERE active=1 ORDER BY sort_order,id').fetchall()
     progress=[{'semester':sem,'result':semester_eligibility(sem['id'],sid)} for sem in semesters]
@@ -417,13 +466,21 @@ def students():
         try: year=int(f.get('year',''))
         except (TypeError,ValueError):
             flash('Choose a valid year of study.','error'); return redirect(url_for('students'))
-        if not f.get('register_no','').strip() or not f.get('name','').strip() or not f.get('department','').strip() or not f.get('class_name','').strip() or not f.get('cohort','').strip() or year not in range(1,9):
+        if not f.get('register_no','').strip() or not f.get('name','').strip() or not f.get('department','').strip() or not f.get('class_name','').strip() or year not in range(1,9):
             flash('Enter the register number, name, department, programme, and a year from 1 to 8.','error'); return redirect(url_for('students'))
         if f.get('yrc_status','Active') not in ('Active','Inactive','Removed'):
             flash('Choose a valid YRC status.','error'); return redirect(url_for('students'))
         try:
-            cur=conn.execute('INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status,cohort) VALUES(?,?,?,?,?,?,?,?,?,?)',(f['register_no'].strip(),f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),f.get('yrc_status','Active'),f['cohort'].strip()))
-            audit('Student added','student',cur.lastrowid,'',f['register_no']); conn.commit(); flash('Student added.','success')
+            register_no=f['register_no'].strip().upper(); requested=f.get('cohort','').strip(); mapping=cohort_mapping_for_register(conn,register_no)
+            if requested:
+                cohort=requested; cohort_id=ensure_cohort(conn,cohort); verification='manual'
+            elif mapping:
+                cohort=mapping['name']; cohort_id=mapping['id']; verification='automatic'
+            else:
+                cohort='Pending verification'; cohort_id=None; verification='pending'
+            cur=conn.execute('''INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status,cohort,cohort_id,cohort_verification)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(register_no,f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),f.get('yrc_status','Active'),cohort,cohort_id,verification))
+            audit('Student added','student',cur.lastrowid,'',f'{register_no}; cohort {cohort} ({verification})'); conn.commit(); flash('Student added.','success')
         except DB_INTEGRITY_ERROR: conn.rollback(); flash('Register number already exists.','error')
         return redirect(url_for('students'))
     q=request.args.get('q','').strip(); status=request.args.get('status',''); dept=request.args.get('department',''); section=request.args.get('section','').upper(); cohort=request.args.get('cohort','')
@@ -467,8 +524,15 @@ def import_students():
         if status not in ('Active','Inactive','Removed'): errors.append(f'Row {row_num}: invalid YRC status {status!r}.'); continue
         if reg.casefold() in known: errors.append(f'Row {row_num}: duplicate register number {reg}.'); continue
         known.add(reg.casefold())
-        cohort=(row.get('cohort') or '').strip() or 'Current batch'
-        records.append((reg,name,department,class_name,section,year,(row.get('email') or '').strip(),(row.get('phone') or '').strip(),status,cohort))
+        requested_cohort=(row.get('cohort') or '').strip()
+        mapping=cohort_mapping_for_register(db(),reg)
+        if requested_cohort:
+            cohort=requested_cohort; cohort_id=None; cohort_verification='manual'
+        elif mapping:
+            cohort=mapping['name']; cohort_id=mapping['id']; cohort_verification='automatic'
+        else:
+            cohort='Pending verification'; cohort_id=None; cohort_verification='pending'
+        records.append((reg,name,department,class_name,section,year,(row.get('email') or '').strip(),(row.get('phone') or '').strip(),status,cohort,cohort_id,cohort_verification))
     if errors:
         preview=' '.join(errors[:5]); more=f' (+{len(errors)-5} more)' if len(errors)>5 else ''
         flash(f'No students imported. Fix {len(errors)} issue(s): {preview}{more}','error'); return redirect(url_for('students'))
@@ -476,7 +540,8 @@ def import_students():
         flash('The CSV has no student rows. No students were imported.','error'); return redirect(url_for('students'))
     conn=db()
     try:
-        conn.executemany('INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status,cohort) VALUES(?,?,?,?,?,?,?,?,?,?)',records)
+        records=[record[:10]+(ensure_cohort(conn,record[9]) if record[11]=='manual' else record[10],record[11]) for record in records]
+        conn.executemany('INSERT INTO students(register_no,name,department,class_name,section,year,email,phone,yrc_status,cohort,cohort_id,cohort_verification) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',records)
         audit('Student CSV imported','student',0,'',f'{len(records)} added'); conn.commit()
     except DB_INTEGRITY_ERROR:
         conn.rollback(); flash('The import was rejected by a database constraint. No students were imported; check register numbers and required fields.','error'); return redirect(url_for('students'))
@@ -487,8 +552,8 @@ def import_students():
 def student_detail(sid, issued_credential=None):
     s=db().execute('SELECT s.*,(SELECT COUNT(DISTINCT a.event_id) FROM attendance a WHERE a.student_id=s.id AND a.status="Present") events,(SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=s.id AND a.status="Present") last_event,(SELECT COUNT(*) FROM events e WHERE e.status="Completed") total_events FROM students s WHERE s.id=?',(sid,)).fetchone()
     if not s: return redirect(url_for('students'))
-    history=db().execute('SELECT e.name,e.event_date,e.semester,a.status,a.credit_points FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.student_id=? ORDER BY e.event_date DESC',(sid,)).fetchall()
-    semester_progress=[{'semester':db().execute('SELECT * FROM semesters WHERE id=?',(n,)).fetchone(), 'result':semester_eligibility(n,sid)} for n in range(1,5)]
+    history=db().execute('SELECT e.name,e.event_date,COALESCE(ap.semester,e.semester) semester,a.status,a.credit_points FROM attendance a JOIN events e ON e.id=a.event_id LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id WHERE a.student_id=? ORDER BY e.event_date DESC',(sid,)).fetchall()
+    semester_progress=[{'semester':sem, 'result':semester_eligibility(sem['id'],sid)} for sem in db().execute('SELECT * FROM semesters ORDER BY id').fetchall()]
     db().commit()
     has_account=bool(db().execute('SELECT 1 FROM student_accounts WHERE student_id=?',(sid,)).fetchone())
     response=app.make_response(render_template('student_detail.html',student=s,history=history,semester_progress=semester_progress,issued_credential=issued_credential,has_student_account=has_account))
@@ -707,7 +772,13 @@ def student_edit(sid):
     if year not in range(1,9) or any(not f.get(k,'').strip() for k in ('register_no','name','department','class_name','cohort')):
         flash('Enter all required student details and choose a year from 1 to 8.','error'); return redirect(url_for('student_detail',sid=sid))
     try:
-        conn.execute('UPDATE students SET register_no=?,name=?,department=?,class_name=?,section=?,year=?,email=?,phone=?,cohort=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(f['register_no'].strip(),f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),f['cohort'].strip(),sid))
+        existing=conn.execute('SELECT cohort,cohort_id,cohort_verification FROM students WHERE id=?',(sid,)).fetchone()
+        cohort=f['cohort'].strip()
+        if cohort!=existing['cohort']:
+            cohort_id=ensure_cohort(conn,cohort); cohort_verification='manual'
+        else:
+            cohort_id=existing['cohort_id']; cohort_verification=existing['cohort_verification']
+        conn.execute('UPDATE students SET register_no=?,name=?,department=?,class_name=?,section=?,year=?,email=?,phone=?,cohort=?,cohort_id=?,cohort_verification=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(f['register_no'].strip(),f['name'].strip(),f['department'].strip(),f['class_name'].strip(),f['section'].strip().upper(),year,f.get('email'),f.get('phone'),cohort,cohort_id,cohort_verification,sid))
         audit('Student edited','student',sid,'','profile updated'); conn.commit(); flash('Student profile updated.','success')
     except DB_INTEGRITY_ERROR: conn.rollback(); flash('Register number already belongs to another student.','error')
     return redirect(url_for('student_detail',sid=sid))
@@ -719,30 +790,55 @@ def events():
     if request.method=='POST':
         f=request.form
         name=f.get('name','').strip()
-        semester=f.get('semester','')
         try:
             date.fromisoformat(f.get('event_date',''))
             capacity=int(f.get('max_participants') or 0) or None
         except (TypeError,ValueError):
             flash('Enter a valid date and seat capacity.','error'); return redirect(url_for('events'))
         status=f.get('status','Upcoming')
-        if (semester not in ('1','2','3','4') or not name or (capacity is not None and capacity<1) or
+        if (not name or (capacity is not None and capacity<1) or
             status not in ('Draft','Upcoming','Open','Closed','Completed','Cancelled')):
-            flash('Enter the event details and choose a semester from 1 to 4.','error'); return redirect(url_for('events'))
-        cur=conn.execute('''INSERT INTO events(name,description,event_date,start_time,end_time,venue,max_participants,deadline,status,semester)
-            VALUES(?,?,?,?,?,?,?,?,?,?)''',(name,f.get('description'),f['event_date'],f.get('start_time'),f.get('end_time'),f.get('venue'),capacity,f.get('deadline'),status,int(semester)))
-        audit('Event created','event',cur.lastrowid,'',f['name']); conn.commit(); flash('Event created.','success'); return redirect(url_for('events'))
+            flash('Enter valid event details.','error'); return redirect(url_for('events'))
+        raw_cohorts=f.getlist('cohort_ids')
+        if f.get('all_active_cohorts')=='1':
+            selected_cohorts=conn.execute("SELECT id FROM cohorts WHERE status='active' ORDER BY name").fetchall()
+            cohort_ids=[row['id'] for row in selected_cohorts]
+        else:
+            try: cohort_ids=sorted({int(value) for value in raw_cohorts})
+            except (TypeError,ValueError):
+                flash('Choose valid participating cohorts.','error'); return redirect(url_for('events'))
+        if not cohort_ids:
+            flash('Add or select at least one participating cohort.','error'); return redirect(url_for('events'))
+        placeholders=','.join('?' for _ in cohort_ids)
+        active_cohorts=conn.execute(f"SELECT id,name FROM cohorts WHERE status='active' AND id IN ({placeholders})",cohort_ids).fetchall()
+        if len(active_cohorts)!=len(cohort_ids):
+            flash('One or more selected cohorts are unavailable.','error'); return redirect(url_for('events'))
+        cur=conn.execute('''INSERT INTO events(name,description,event_date,start_time,end_time,venue,category,max_participants,deadline,status,semester)
+            VALUES(?,?,?,?,?,?,?,?,?,?,NULL)''',(name,f.get('description'),f['event_date'],f.get('start_time'),f.get('end_time'),f.get('venue'),f.get('category','').strip(),capacity,f.get('deadline'),status))
+        event_id=cur.lastrowid
+        for cohort in active_cohorts:
+            period=academic_period_for(conn,cohort['id'],f['event_date'])
+            conn.execute('INSERT INTO event_cohorts(event_id,cohort_id,academic_period_id,mapping_status) VALUES(?,?,?,?)',
+                         (event_id,cohort['id'],period['id'] if period else None,'configured' if period else 'pending'))
+        audit('Event created','event',event_id,'',f'{name}; cohorts={len(active_cohorts)}; date={f["event_date"]}')
+        conn.commit(); flash('Event created once with cohort-specific academic mappings. Unconfigured periods remain pending review.','success'); return redirect(url_for('event_detail',eid=event_id))
     q=request.args.get('q','').strip(); status=request.args.get('status','All')
     semester=request.args.get('semester','All')
     where=[]; args=[]
     if q: where.append('(e.name LIKE ? OR e.venue LIKE ?)'); args.extend((f'%{q}%',f'%{q}%'))
     if status in ('Draft','Upcoming','Open','Closed','Completed','Cancelled'): where.append('e.status=?'); args.append(status)
-    if semester in ('1','2','3','4'): where.append('e.semester=?'); args.append(int(semester))
-    elif semester=='Unassigned': where.append('e.semester IS NULL')
-    else: semester='All'
-    rows=conn.execute('SELECT e.*,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present FROM events e'+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY e.event_date DESC',args).fetchall()
+    semester_options=[row['id'] for row in conn.execute('SELECT id FROM semesters WHERE active=1 ORDER BY id').fetchall()]
+    if semester.isdigit() and int(semester) in semester_options:
+        semester_number=int(semester)
+        where.append('(EXISTS(SELECT 1 FROM event_cohorts ec JOIN academic_periods ap ON ap.id=ec.academic_period_id WHERE ec.event_id=e.id AND ap.semester=?) OR (NOT EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=e.id) AND e.semester=?))')
+        args.extend((semester_number,semester_number))
+    elif semester=='Unassigned':
+        where.append('(EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=e.id AND ec.academic_period_id IS NULL) OR (NOT EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=e.id) AND e.semester IS NULL))')
+    elif semester!='Unassigned': semester='All'
+    rows=conn.execute('SELECT e.*,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM event_cohorts ec WHERE ec.event_id=e.id) cohort_count FROM events e'+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY e.event_date DESC',args).fetchall()
     summary=conn.execute("SELECT COUNT(*) total, SUM(CASE WHEN status IN ('Upcoming','Open') THEN 1 ELSE 0 END) active, SUM(CASE WHEN status='Cancelled' THEN 1 ELSE 0 END) cancelled FROM events").fetchone()
-    return render_template('events.html',events=rows,q=q,status=status,semester=semester,summary=summary)
+    active_cohorts=conn.execute("SELECT id,name FROM cohorts WHERE status='active' ORDER BY name").fetchall()
+    return render_template('events.html',events=rows,q=q,status=status,semester=semester,summary=summary,active_cohorts=active_cohorts,semester_options=semester_options)
 
 @app.get('/attendance')
 @login_required
@@ -768,9 +864,10 @@ def attendance_event_csv(eid):
     if not event:
         flash('That event is unavailable for attendance export.','error')
         return redirect(url_for('attendance_page'))
-    students=conn.execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,a.status,a.credit_points,e.semester
+    students=conn.execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,a.status,a.credit_points,COALESCE(ap.semester,e.semester) semester
         FROM attendance a JOIN students s ON s.id=a.student_id
         JOIN events e ON e.id=a.event_id
+        LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id
         JOIN event_participants p ON p.event_id=a.event_id AND p.student_id=a.student_id AND p.selection_status='Selected'
         WHERE a.event_id=? AND a.status='Present'
         ORDER BY s.name,s.register_no''',(eid,)).fetchall()
@@ -792,6 +889,163 @@ def normalize_import_key(value):
 
 def normalize_register_no(value):
     return re.sub(r'[^A-Z0-9]','',str(value or '').upper())
+
+def cohort_mapping_for_register(conn, register_no):
+    normalized=normalize_register_no(register_no)
+    if not re.fullmatch(r'[0-9]{2}[A-Z0-9]{4,}',normalized):
+        return None
+    mappings=conn.execute("SELECT m.prefix,c.id,c.name FROM cohort_prefix_mappings m JOIN cohorts c ON c.id=m.cohort_id WHERE m.active=1 AND c.status='active' ORDER BY LENGTH(m.prefix) DESC,m.prefix").fetchall()
+    return next((mapping for mapping in mappings if normalized.startswith(mapping['prefix'])),None)
+
+def ensure_cohort(conn,name,admission_year=None):
+    label=' '.join(str(name or '').split()).strip()
+    if not label: return None
+    conn.execute("INSERT OR IGNORE INTO cohorts(name,admission_year,status) VALUES(?,?,'active')",(label,admission_year))
+    return conn.execute('SELECT id FROM cohorts WHERE name=?',(label,)).fetchone()['id']
+
+def academic_period_for(conn, cohort_id, event_date):
+    """Return a configured period containing event_date, without making assumptions."""
+    return conn.execute("SELECT * FROM academic_periods WHERE cohort_id=? AND status='active' AND start_date<=? AND end_date>=? ORDER BY semester DESC LIMIT 1",
+                        (cohort_id,event_date,event_date)).fetchone()
+
+def participant_period_id(conn, event_id, student_id):
+    """Resolve a volunteer's period for this event; NULL means configuration is pending."""
+    row=conn.execute('''SELECT s.cohort_id,e.event_date,ec.academic_period_id,ec.id mapping_id
+        FROM students s JOIN events e ON e.id=? LEFT JOIN event_cohorts ec ON ec.event_id=e.id AND ec.cohort_id=s.cohort_id
+        WHERE s.id=?''',(event_id,student_id)).fetchone()
+    if not row or not row['cohort_id']:
+        return None
+    if row['mapping_id']:
+        return row['academic_period_id']
+    period=academic_period_for(conn,row['cohort_id'],row['event_date'])
+    return period['id'] if period else None
+
+def snapshot_participant_period(conn, event_id, student_id):
+    participant=conn.execute('SELECT academic_period_id FROM event_participants WHERE event_id=? AND student_id=?',(event_id,student_id)).fetchone()
+    if not participant or participant['academic_period_id'] is not None:
+        return participant['academic_period_id'] if participant else None
+    period_id=participant_period_id(conn,event_id,student_id)
+    if period_id is not None:
+        conn.execute('UPDATE event_participants SET academic_period_id=? WHERE event_id=? AND student_id=? AND academic_period_id IS NULL',(period_id,event_id,student_id))
+    return period_id
+
+def student_allowed_for_event(conn,event_id,student_id):
+    mappings=conn.execute('SELECT COUNT(*) FROM event_cohorts WHERE event_id=?',(event_id,)).fetchone()[0]
+    if not mappings:
+        return True
+    return bool(conn.execute('''SELECT 1 FROM students s JOIN event_cohorts ec ON ec.event_id=? AND ec.cohort_id=s.cohort_id
+        WHERE s.id=?''',(event_id,student_id)).fetchone())
+
+@app.route('/academic-calendar',methods=['GET','POST'])
+@login_required
+def academic_calendar():
+    conn=db()
+    if request.method=='POST':
+        action=request.form.get('action','')
+        if action=='cohort':
+            name=' '.join(request.form.get('name','').split()).strip()
+            try: year=int(request.form.get('admission_year',''))
+            except (TypeError,ValueError): year=0
+            year_start=request.form.get('academic_year_start','').strip()
+            try: year_start=date.fromisoformat(year_start).isoformat() if year_start else None
+            except ValueError: year_start='invalid'
+            if not name or len(name)>100 or year not in range(2000,2201) or year_start=='invalid':
+                flash('Enter a cohort name, valid admission year, and optional valid academic year start.','error')
+            else:
+                try:
+                    cur=conn.execute("INSERT INTO cohorts(name,admission_year,academic_year_start,status) VALUES(?,?,?,'active')",(name,year,year_start))
+                    audit('Cohort created','cohort',cur.lastrowid,'',name); conn.commit(); flash('Cohort added. Configure its periods before assigning events.','success')
+                except DB_INTEGRITY_ERROR: conn.rollback(); flash('That cohort already exists.','error')
+        elif action=='cohort_metadata':
+            try: cohort_id=int(request.form.get('cohort_id','')); year=int(request.form.get('admission_year',''))
+            except (TypeError,ValueError): cohort_id=year=0
+            year_start=request.form.get('academic_year_start','').strip()
+            try: year_start=date.fromisoformat(year_start).isoformat()
+            except ValueError: year_start=''
+            cohort=conn.execute('SELECT name,admission_year,academic_year_start FROM cohorts WHERE id=?',(cohort_id,)).fetchone()
+            if not cohort or year not in range(2000,2201) or not year_start:
+                flash('Choose a cohort and enter a valid admission year and academic-year start date.','error')
+            else:
+                conn.execute('UPDATE cohorts SET admission_year=?,academic_year_start=? WHERE id=?',(year,year_start,cohort_id))
+                audit('Cohort calendar metadata updated','cohort',cohort_id,{'admission_year':cohort['admission_year'],'academic_year_start':cohort['academic_year_start']},{'admission_year':year,'academic_year_start':year_start})
+                conn.commit(); flash('Cohort calendar metadata saved.','success')
+        elif action=='mapping':
+            prefix=request.form.get('prefix','').strip().upper()
+            try: cohort_id=int(request.form.get('cohort_id',''))
+            except (TypeError,ValueError): cohort_id=0
+            cohort=conn.execute("SELECT name FROM cohorts WHERE id=? AND status='active'",(cohort_id,)).fetchone()
+            if not re.fullmatch(r'[0-9]{2,4}',prefix) or not cohort:
+                flash('Choose an active cohort and a two-to-four-digit registration prefix.','error')
+            else:
+                old=conn.execute('SELECT cohort_id FROM cohort_prefix_mappings WHERE prefix=?',(prefix,)).fetchone()
+                conn.execute('''INSERT INTO cohort_prefix_mappings(prefix,cohort_id,active) VALUES(?,?,1)
+                    ON CONFLICT(prefix) DO UPDATE SET cohort_id=excluded.cohort_id,active=1''',(prefix,cohort_id))
+                audit('Cohort prefix mapping saved','cohort_prefix',None,old['cohort_id'] if old else '',f'{prefix}:{cohort_id}'); conn.commit(); flash('Prefix mapping saved for future volunteer records.','success')
+        elif action=='period':
+            try:
+                cohort_id=int(request.form.get('cohort_id','')); semester=int(request.form.get('semester',''))
+                start=date.fromisoformat(request.form.get('start_date','')).isoformat(); end=date.fromisoformat(request.form.get('end_date','')).isoformat()
+            except (TypeError,ValueError):
+                cohort_id=semester=0; start=end=''
+            cohort=conn.execute("SELECT name FROM cohorts WHERE id=? AND status='active'",(cohort_id,)).fetchone()
+            name=' '.join(request.form.get('name','').split()).strip() or f'Semester {semester}'
+            overlap=conn.execute("SELECT id FROM academic_periods WHERE cohort_id=? AND status='active' AND start_date<=? AND end_date>=? AND semester<>?",(cohort_id,end,start,semester)).fetchone() if cohort else None
+            if not cohort or semester not in range(1,33) or not start or end<start or len(name)>100 or overlap:
+                flash('Enter a valid period and ensure dates do not overlap another active period for this cohort.','error')
+            else:
+                old=conn.execute('SELECT * FROM academic_periods WHERE cohort_id=? AND semester=?',(cohort_id,semester)).fetchone()
+                conn.execute('INSERT OR IGNORE INTO semesters(id,name) VALUES(?,?)',(semester,f'Semester {semester}'))
+                conn.execute('''INSERT INTO academic_periods(cohort_id,semester,name,start_date,end_date,status) VALUES(?,?,?,?,?,'active')
+                    ON CONFLICT(cohort_id,semester) DO UPDATE SET name=excluded.name,start_date=excluded.start_date,end_date=excluded.end_date,status='active' ''',(cohort_id,semester,name,start,end))
+                current=conn.execute('SELECT id FROM academic_periods WHERE cohort_id=? AND semester=?',(cohort_id,semester)).fetchone()
+                conn.execute('''UPDATE event_cohorts SET academic_period_id=?,mapping_status='configured'
+                    WHERE cohort_id=? AND mapping_status='pending' AND event_id IN (
+                      SELECT e.id FROM events e WHERE e.status IN ('Draft','Upcoming','Open') AND e.event_date>=? AND e.event_date<=?
+                        AND NOT EXISTS(SELECT 1 FROM attendance a JOIN students s ON s.id=a.student_id WHERE a.event_id=e.id AND s.cohort_id=?))''',
+                    (current['id'],cohort_id,start,end,cohort_id))
+                conn.execute('''UPDATE event_participants SET academic_period_id=? WHERE academic_period_id IS NULL
+                    AND EXISTS(SELECT 1 FROM students s WHERE s.id=event_participants.student_id AND s.cohort_id=?)
+                    AND event_id IN (SELECT ec.event_id FROM event_cohorts ec JOIN events e ON e.id=ec.event_id
+                      WHERE ec.cohort_id=? AND ec.academic_period_id=? AND e.status IN ('Draft','Upcoming','Open')
+                        AND e.event_date>=? AND e.event_date<=?
+                        AND NOT EXISTS(SELECT 1 FROM attendance a WHERE a.event_id=e.id AND a.student_id=event_participants.student_id))''',
+                    (current['id'],cohort_id,cohort_id,current['id'],start,end))
+                audit('Cohort academic period configured','academic_period',current['id'],dict(old) if old else '',f'{cohort["name"]}; {name}; {start}..{end}')
+                conn.commit(); flash('Period saved. Existing attendance snapshots were not recalculated.','success')
+        else:
+            flash('Choose a valid calendar action.','error')
+        return redirect(url_for('academic_calendar'))
+    cohorts=conn.execute('''SELECT c.*,(SELECT COUNT(*) FROM students s WHERE s.cohort_id=c.id) volunteer_count,
+        (SELECT COUNT(*) FROM academic_periods p WHERE p.cohort_id=c.id AND p.status='active') period_count
+        FROM cohorts c WHERE c.status='active' ORDER BY COALESCE(c.admission_year,9999),c.name''').fetchall()
+    periods=conn.execute('''SELECT p.*,c.name cohort_name FROM academic_periods p JOIN cohorts c ON c.id=p.cohort_id
+        WHERE p.status='active' AND c.status='active' ORDER BY c.name,p.semester''').fetchall()
+    mappings=conn.execute('''SELECT m.*,c.name cohort_name FROM cohort_prefix_mappings m JOIN cohorts c ON c.id=m.cohort_id
+        WHERE c.status='active' ORDER BY m.prefix''').fetchall()
+    pending=conn.execute('''SELECT e.id event_id,e.name event_name,e.event_date,c.name cohort_name FROM event_cohorts ec
+        JOIN events e ON e.id=ec.event_id JOIN cohorts c ON c.id=ec.cohort_id WHERE ec.mapping_status='pending' AND c.status='active' ORDER BY e.event_date,e.id,c.name''').fetchall()
+    pending_students=conn.execute("SELECT id,name,register_no,cohort FROM students WHERE cohort_verification='pending' OR cohort_id IS NULL ORDER BY register_no,name").fetchall()
+    current=[]
+    for cohort in cohorts:
+        period=academic_period_for(conn,cohort['id'],date.today().isoformat())
+        current.append({'cohort':cohort,'period':period,'academic_year':((period['semester']+1)//2 if period else None)})
+    return render_template('academic_calendar.html',cohorts=cohorts,periods=periods,mappings=mappings,pending=pending,pending_students=pending_students,current=current)
+
+@app.post('/academic-calendar/students/<int:sid>/assign')
+@login_required
+def academic_cohort_assign(sid):
+    conn=db()
+    try: cohort_id=int(request.form.get('cohort_id',''))
+    except (TypeError,ValueError): cohort_id=0
+    cohort=conn.execute("SELECT name FROM cohorts WHERE id=? AND status='active'",(cohort_id,)).fetchone()
+    student=conn.execute('SELECT cohort FROM students WHERE id=?',(sid,)).fetchone()
+    if not cohort or not student:
+        flash('Choose an active cohort and existing volunteer. No records were changed.','error')
+    else:
+        conn.execute("UPDATE students SET cohort=?,cohort_id=?,cohort_verification='manual',updated_at=CURRENT_TIMESTAMP WHERE id=?",(cohort['name'],cohort_id,sid))
+        audit('Student cohort manually confirmed','student',sid,student['cohort'],cohort['name']); conn.commit()
+        flash('Cohort confirmed. Participation and attendance remain attached to the same student record.','success')
+    return redirect(url_for('academic_calendar'))
 
 def normalize_student_name(value):
     ascii_name=unicodedata.normalize('NFKD',str(value or '')).encode('ascii','ignore').decode('ascii').casefold()
@@ -1088,6 +1342,8 @@ def participation_import_confirm(batch_id):
                 cur=conn.execute('INSERT INTO events(name,description,event_date,status) VALUES(?,?,?,?)',
                                  (canonical_event_name(event['name']),'Imported from YRC participation sheet',dates[event['name']],'Completed'))
                 event_ids[event['name']]=cur.lastrowid
+        event_ids_without_cohort_scope={event_id for event_id in set(event_ids.values())
+            if not conn.execute('SELECT 1 FROM event_cohorts WHERE event_id=?',(event_id,)).fetchone()}
         skipped=0
         current_roster_by_reg={}; current_roster_by_name={}; current_roster_name_by_id={}
         for student_row in conn.execute('SELECT id,register_no,name FROM students').fetchall():
@@ -1128,15 +1384,27 @@ def participation_import_confirm(batch_id):
                     pair in queued_pairs or (name_key and event_name_key in queued_names)):
                 duplicate_skipped+=1
                 skipped+=1; continue
+            volunteer=conn.execute('SELECT cohort_id FROM students WHERE id=?',(student_id,)).fetchone()
+            if event_id not in event_ids_without_cohort_scope and not student_allowed_for_event(conn,event_id,student_id):
+                skipped+=1; continue
+            existing_mapping=conn.execute('SELECT 1 FROM event_cohorts WHERE event_id=? AND cohort_id=?',(event_id,volunteer['cohort_id'] if volunteer else None)).fetchone()
+            if volunteer and volunteer['cohort_id'] and not existing_mapping and event_id not in event_ids_without_cohort_scope:
+                skipped+=1; continue
+            if volunteer and volunteer['cohort_id'] and not existing_mapping and event_id in event_ids_without_cohort_scope:
+                event_row=conn.execute('SELECT event_date FROM events WHERE id=?',(event_id,)).fetchone()
+                period=academic_period_for(conn,volunteer['cohort_id'],event_row['event_date'])
+                conn.execute('INSERT INTO event_cohorts(event_id,cohort_id,academic_period_id,mapping_status) VALUES(?,?,?,?)',
+                    (event_id,volunteer['cohort_id'],period['id'] if period else None,'configured' if period else 'pending'))
             queued_pairs.add(pair)
             if name_key:
                 queued_names.add(event_name_key)
-            participants_to_add.append((event_id,student_id,session['admin_id'],'Selected'))
-            attendance_to_add.append((event_id,student_id,'Present',session['admin_id']))
+            period_id=participant_period_id(conn,event_id,student_id)
+            participants_to_add.append((event_id,student_id,session['admin_id'],'Selected',period_id))
+            attendance_to_add.append((event_id,student_id,'Present',session['admin_id'],period_id))
         if participants_to_add:
-            conn.executemany('INSERT INTO event_participants(event_id,student_id,selected_by,selection_status) VALUES(?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status=excluded.selection_status,selected_by=excluded.selected_by',participants_to_add)
+            conn.executemany('INSERT INTO event_participants(event_id,student_id,selected_by,selection_status,academic_period_id) VALUES(?,?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status=excluded.selection_status,selected_by=excluded.selected_by',participants_to_add)
             marked_at_expression='CURRENT_TIMESTAMP::text' if USING_POSTGRES else 'CURRENT_TIMESTAMP'
-            conn.executemany(f'INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET status=excluded.status,marked_at={marked_at_expression},marked_by=excluded.marked_by',attendance_to_add)
+            conn.executemany(f'INSERT INTO attendance(event_id,student_id,status,marked_by,academic_period_id) VALUES(?,?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET status=excluded.status,marked_at={marked_at_expression},marked_by=excluded.marked_by',attendance_to_add)
         imported=len(attendance_to_add)
         conn.execute('UPDATE participation_import_batches SET status="Completed",imported_count=?,skipped_count=?,completed_at=CURRENT_TIMESTAMP WHERE id=?',
                      (imported,skipped,batch_id))
@@ -1173,13 +1441,17 @@ def fair_selection():
 def event_detail(eid):
     event=db().execute('SELECT * FROM events WHERE id=?',(eid,)).fetchone()
     if not event:return redirect(url_for('events'))
-    participants=db().execute('''SELECT s.*,p.selection_status,a.status attendance,a.marked_at,
+    participants=db().execute('''SELECT s.*,p.selection_status,p.academic_period_id participant_period_id,pp.semester participant_semester,pp.name participant_period_name,a.status attendance,a.marked_at,
         (SELECT COUNT(*) FROM attendance old WHERE old.student_id=s.id AND old.status="Present") past_events
         FROM event_participants p JOIN students s ON s.id=p.student_id
+        LEFT JOIN academic_periods pp ON pp.id=p.academic_period_id
         LEFT JOIN attendance a ON a.event_id=p.event_id AND a.student_id=p.student_id
         WHERE p.event_id=? ORDER BY s.name''',(eid,)).fetchall()
-    available=db().execute("SELECT id,name,register_no,department,class_name,section FROM students WHERE yrc_status='Active' AND id NOT IN (SELECT student_id FROM event_participants WHERE event_id=? AND selection_status='Selected') ORDER BY name",(eid,)).fetchall()
-    return render_template('event_detail.html',event=event,participants=participants,available=available)
+    available=db().execute("SELECT id,name,register_no,department,class_name,section FROM students s WHERE yrc_status='Active' AND id NOT IN (SELECT student_id FROM event_participants WHERE event_id=? AND selection_status='Selected') AND (NOT EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=?) OR EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=? AND ec.cohort_id=s.cohort_id)) ORDER BY name",(eid,eid,eid)).fetchall()
+    cohort_mappings=db().execute('''SELECT c.name cohort_name,ec.mapping_status,ap.semester,((ap.semester+1)/2) academic_year,ap.name period_name,ap.start_date,ap.end_date
+        FROM event_cohorts ec JOIN cohorts c ON c.id=ec.cohort_id LEFT JOIN academic_periods ap ON ap.id=ec.academic_period_id
+        WHERE ec.event_id=? ORDER BY c.name''',(eid,)).fetchall()
+    return render_template('event_detail.html',event=event,participants=participants,available=available,cohort_mappings=cohort_mappings)
 
 @app.post('/events/<int:eid>/semester')
 @login_required
@@ -1198,6 +1470,40 @@ def event_semester_update(eid):
     audit('Event semester changed','event',eid,event['semester'] or 'Unassigned',new_semester or 'Unassigned')
     conn.commit()
     flash('Event semester updated. Attendance and credit history were preserved.','success')
+    return redirect(url_for('event_detail',eid=eid))
+
+@app.post('/events/<int:eid>/reschedule')
+@login_required
+def event_reschedule(eid):
+    conn=db(); new_date=request.form.get('event_date','').strip()
+    try: date.fromisoformat(new_date)
+    except ValueError:
+        flash('Choose a valid event date.','error'); return redirect(url_for('event_detail',eid=eid))
+    event=conn.execute('SELECT name,event_date,status FROM events WHERE id=?',(eid,)).fetchone()
+    if not event:
+        flash('Event not found.','error'); return redirect(url_for('events'))
+    if event['status']=='Cancelled':
+        flash('A cancelled event cannot be rescheduled.','error'); return redirect(url_for('event_detail',eid=eid))
+    if event['event_date']==new_date:
+        flash('The event already has that date.','success'); return redirect(url_for('event_detail',eid=eid))
+    old_snapshots=[]
+    for row in conn.execute('''SELECT p.student_id,p.academic_period_id participant_period,a.academic_period_id attendance_period
+        FROM event_participants p LEFT JOIN attendance a ON a.event_id=p.event_id AND a.student_id=p.student_id WHERE p.event_id=?''',(eid,)).fetchall():
+        old_snapshots.append({'student_id':row['student_id'],'participant_period':row['participant_period'],'attendance_period':row['attendance_period']})
+    conn.execute('UPDATE events SET event_date=? WHERE id=?',(new_date,eid))
+    mappings=conn.execute('SELECT id,cohort_id FROM event_cohorts WHERE event_id=?',(eid,)).fetchall()
+    for mapping in mappings:
+        period=academic_period_for(conn,mapping['cohort_id'],new_date)
+        conn.execute('UPDATE event_cohorts SET academic_period_id=?,mapping_status=? WHERE id=?',
+                     (period['id'] if period else None,'configured' if period else 'pending',mapping['id']))
+    for row in conn.execute('SELECT student_id FROM event_participants WHERE event_id=?',(eid,)).fetchall():
+        period_id=participant_period_id(conn,eid,row['student_id'])
+        conn.execute('UPDATE event_participants SET academic_period_id=? WHERE event_id=? AND student_id=?',(period_id,eid,row['student_id']))
+        conn.execute('UPDATE attendance SET academic_period_id=? WHERE event_id=? AND student_id=?',(period_id,eid,row['student_id']))
+    new_snapshots=[dict(row) for row in conn.execute('''SELECT p.student_id,p.academic_period_id participant_period,a.academic_period_id attendance_period
+        FROM event_participants p LEFT JOIN attendance a ON a.event_id=p.event_id AND a.student_id=p.student_id WHERE p.event_id=?''',(eid,)).fetchall()]
+    audit('Event rescheduled; cohort periods recalculated','event',eid,{'date':event['event_date'],'snapshots':old_snapshots},{'date':new_date,'snapshots':new_snapshots})
+    conn.commit(); flash('Event date updated. Cohort periods were recalculated and the change was audited.','success')
     return redirect(url_for('event_detail',eid=eid))
 
 @app.post('/events/<int:eid>/eligibility')
@@ -1254,11 +1560,13 @@ def recommend(eid):
         (SELECT COUNT(*) FROM selection_history h WHERE h.student_id=s.id AND h.decision='Selected' AND h.event_id<>?) offers
       FROM students s LEFT JOIN attendance a ON a.student_id=s.id
       WHERE s.yrc_status='Active' AND s.id NOT IN (SELECT student_id FROM event_participants WHERE event_id=? AND selection_status='Selected')
+        AND (NOT EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=?) OR EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=? AND ec.cohort_id=s.cohort_id))
       GROUP BY s.id
-    ) AS candidate_scores ORDER BY (attended*100+offers), RANDOM() LIMIT ?''',(eid,eid,limit)).fetchall()
+    ) AS candidate_scores ORDER BY (attended*100+offers), RANDOM() LIMIT ?''',(eid,eid,eid,eid,limit)).fetchall()
     for rank,c in enumerate(candidates,1):
         score=c['attended']*100+c['offers']
         conn.execute('INSERT INTO event_participants(event_id,student_id,selected_by,selection_status) VALUES(?,?,? ,?) ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status="Selected",selected_at=CURRENT_TIMESTAMP,selected_by=excluded.selected_by',(eid,c['id'],session['admin_id'],'Selected'))
+        snapshot_participant_period(conn,eid,c['id'])
         conn.execute('INSERT INTO selection_history(event_id,student_id,decision,attended_count,seat_offers,priority_score,tie_break,decided_by) VALUES(?,?,?,?,?,?,?,?)',(eid,c['id'],'Selected',c['attended'],c['offers'],score,'random tie break after priority score',session['admin_id']))
     audit('Fair recommendations generated','event',eid,'',len(candidates)); conn.commit(); flash(f'{len(candidates)} recommendations saved within the remaining capacity. Review the list before treating it as final.','success'); return redirect(url_for('event_detail',eid=eid))
 
@@ -1271,9 +1579,11 @@ def select_student(eid):
     if not event or (event['max_participants'] is not None and already>=event['max_participants']):
         flash('No seats remain for this event.','error'); return redirect(url_for('event_detail',eid=eid))
     student=conn.execute("SELECT yrc_status,name FROM students WHERE id=?",(sid,)).fetchone()
+    if not student_allowed_for_event(conn,eid,sid):
+        flash('This volunteer is not in a cohort selected for this event.','error'); return redirect(url_for('event_detail',eid=eid))
     if student and student['yrc_status']=='Active':
         recent=conn.execute("SELECT COUNT(*) FROM (SELECT e.id FROM events e JOIN attendance a ON a.event_id=e.id WHERE a.student_id=? AND a.status='Present' ORDER BY e.event_date DESC LIMIT 5)",(sid,)).fetchone()[0]
-        conn.execute('INSERT INTO event_participants(event_id,student_id,selected_by) VALUES(?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status="Selected",selected_at=CURRENT_TIMESTAMP,selected_by=excluded.selected_by',(eid,sid,session['admin_id'])); audit('Manual participant selection','event',eid,'',sid); conn.commit()
+        conn.execute('INSERT INTO event_participants(event_id,student_id,selected_by) VALUES(?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET selection_status="Selected",selected_at=CURRENT_TIMESTAMP,selected_by=excluded.selected_by',(eid,sid,session['admin_id'])); snapshot_participant_period(conn,eid,sid); audit('Manual participant selection','event',eid,'',sid); conn.commit()
         if recent >= 4: flash(f'Participation note: {student["name"]} attended {recent} of the last 5 events.', 'error')
     return redirect(url_for('event_detail',eid=eid))
 
@@ -1300,6 +1610,9 @@ def select_multiple_students(eid):
     if len(eligible)!=len(requested):
         flash('One or more selected students are no longer active. Reload the page and review the list; no one was added.','error')
         return redirect(url_for('event_detail',eid=eid))
+    if any(not student_allowed_for_event(conn,eid,row['id']) for row in eligible):
+        flash('One or more volunteers are outside this event’s selected cohorts. No one was added.','error')
+        return redirect(url_for('event_detail',eid=eid))
     already=conn.execute("SELECT COUNT(*) FROM event_participants WHERE event_id=? AND selection_status='Selected'",(eid,)).fetchone()[0]
     remaining=(event['max_participants']-already) if event['max_participants'] is not None else None
     if remaining is not None and len(requested)>remaining:
@@ -1309,6 +1622,7 @@ def select_multiple_students(eid):
         VALUES(?,?,?,'Selected') ON CONFLICT(event_id,student_id) DO UPDATE SET
         selection_status='Selected',selected_at=CURRENT_TIMESTAMP,selected_by=excluded.selected_by''',
         [(eid,row['id'],session['admin_id']) for row in eligible])
+    for row in eligible: snapshot_participant_period(conn,eid,row['id'])
     audit('Manual multi-select participants','event',eid,'',len(eligible))
     conn.commit()
     flash(f'Added {len(eligible)} participant(s). Attendance was not changed.','success')
@@ -1368,7 +1682,7 @@ def import_event_participants(eid):
             flash(f'No participants were added. Row {row_number} names event "{supplied}", but this page is for "{event["name"]}". Every row must use the same event name (case and extra spaces are ignored).','error')
             return redirect(url_for('event_detail',eid=eid))
 
-    roster=conn.execute("SELECT id,register_no,name FROM students WHERE yrc_status='Active'").fetchall()
+    roster=conn.execute("SELECT s.id,s.register_no,s.name FROM students s WHERE s.yrc_status='Active' AND (NOT EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=?) OR EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=? AND ec.cohort_id=s.cohort_id))",(eid,eid)).fetchall()
     by_reg={}; by_name={}
     for student in roster:
         by_reg.setdefault(normalize_register_no(student['register_no']),[]).append(student['id'])
@@ -1405,6 +1719,7 @@ def import_event_participants(eid):
             VALUES(?,?,?,'Selected') ON CONFLICT(event_id,student_id) DO UPDATE SET
             selection_status='Selected',selected_at=CURRENT_TIMESTAMP,selected_by=excluded.selected_by''',
             [(eid,student_id,session['admin_id']) for student_id in queued])
+        for student_id in queued: snapshot_participant_period(conn,eid,student_id)
         audit('Participants imported from CSV','event',eid,event['name'],
               f'{added} added; {already} already selected; {unmatched} unmatched; {duplicates} duplicate rows')
         conn.commit()
@@ -1431,7 +1746,8 @@ def mark_attendance(eid,sid):
     if status=='Undo':
         conn.execute('DELETE FROM attendance WHERE event_id=? AND student_id=?',(eid,sid))
     else:
-        conn.execute('INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET status=excluded.status,marked_at=CURRENT_TIMESTAMP,marked_by=excluded.marked_by',(eid,sid,status,session['admin_id']))
+        period_id=snapshot_participant_period(conn,eid,sid)
+        conn.execute('INSERT INTO attendance(event_id,student_id,status,marked_by,academic_period_id) VALUES(?,?,?,?,?) ON CONFLICT(event_id,student_id) DO UPDATE SET status=excluded.status,marked_at=CURRENT_TIMESTAMP,marked_by=excluded.marked_by',(eid,sid,status,session['admin_id'],period_id))
     audit('Attendance '+status,'attendance',eid,'',sid); conn.commit(); return redirect(url_for('event_detail',eid=eid))
 
 @app.post('/events/<int:eid>/attendance/mark-all-present')
@@ -1445,13 +1761,13 @@ def mark_all_present(eid):
     if event['status']=='Cancelled':
         flash('Attendance cannot be marked for a cancelled event.','error')
         return redirect(url_for('event_detail',eid=eid))
-    students=conn.execute("SELECT student_id FROM event_participants WHERE event_id=? AND selection_status='Selected'",(eid,)).fetchall()
+    students=conn.execute("SELECT student_id,academic_period_id FROM event_participants WHERE event_id=? AND selection_status='Selected'",(eid,)).fetchall()
     if not students:
         flash('There are no selected participants to mark present.','error')
         return redirect(url_for('event_detail',eid=eid))
-    conn.executemany('''INSERT INTO attendance(event_id,student_id,status,marked_by) VALUES(?,?,'Present',?)
+    conn.executemany('''INSERT INTO attendance(event_id,student_id,status,marked_by,academic_period_id) VALUES(?,?,'Present',?,?)
         ON CONFLICT(event_id,student_id) DO UPDATE SET status='Present',marked_at=CURRENT_TIMESTAMP,marked_by=excluded.marked_by''',
-        [(eid,row['student_id'],session['admin_id']) for row in students])
+        [(eid,row['student_id'],session['admin_id'],row['academic_period_id']) for row in students])
     audit('Attendance marked Present for all selected participants','attendance',eid,'',len(students))
     conn.commit()
     flash(f'Marked {len(students)} selected participant(s) present for {event["name"]}.','success')
@@ -1461,28 +1777,29 @@ def mark_all_present(eid):
 @login_required
 def reports():
     semester_filter=request.args.get('semester','All')
+    semester_options=[row['id'] for row in db().execute('SELECT id FROM semesters WHERE active=1 ORDER BY id').fetchall()]
     cohort_filter=request.args.get('cohort','')
     cohort_clause=' AND s.cohort=?' if cohort_filter else ''
     cohort_args=[cohort_filter] if cohort_filter else []
-    if semester_filter not in ('1','2','3','4','Unassigned'):
+    if not (semester_filter.isdigit() and int(semester_filter) in semester_options) and semester_filter!='Unassigned':
         semester_filter='All'
     semester_where=''
     semester_args=[]
-    if semester_filter in ('1','2','3','4'):
-        semester_where=' AND e.semester=?'
+    if semester_filter.isdigit():
+        semester_where=' AND COALESCE(ap.semester,e.semester)=?'
         semester_args.append(int(semester_filter))
     elif semester_filter=='Unassigned':
-        semester_where=' AND e.semester IS NULL'
+        semester_where=' AND COALESCE(ap.semester,e.semester) IS NULL'
     conn=db(); rows=conn.execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone,
-        (SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id
+        (SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id
          WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_where+''') events,
-        (SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id
+        (SELECT MAX(e.event_date) FROM attendance a JOIN events e ON e.id=a.event_id LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id
          WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_where+''') last_event
         FROM students s WHERE s.yrc_status='Active' '''+cohort_clause+''' ORDER BY events,s.name''',semester_args*2+cohort_args).fetchall()
     attendance_rows=conn.execute('''SELECT s.id,s.register_no,s.name,s.department,s.class_name,s.section,
         e.name event_name,e.event_date
         FROM students s JOIN attendance a ON a.student_id=s.id AND a.status='Present'
-        JOIN events e ON e.id=a.event_id
+        JOIN events e ON e.id=a.event_id LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id
         WHERE s.yrc_status='Active' AND e.status<>'Cancelled' '''+semester_where+cohort_clause+'''
         ORDER BY s.name,e.event_date,e.name''',semester_args+cohort_args).fetchall()
     attended_by_student={}
@@ -1504,11 +1821,20 @@ def reports():
         ineligible_by_department[department]=ineligible_by_department.get(department,0)+1
     department_counts=[{'name':department,'count':ineligible_by_department.get(department,0)}
                        for department in sorted({(r['department'] or 'Unassigned').strip() for r in rows})]
-    evrows=conn.execute('SELECT e.name,e.event_date,e.semester,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e WHERE 1=1'+semester_where+' ORDER BY e.event_date DESC',semester_args).fetchall()
-    credit_rows=conn.execute('''SELECT a.id attendance_id,a.credit_points,e.semester,e.name event_name,e.event_date,
+    event_semester_where=''
+    if semester_filter.isdigit():
+        event_semester_where=' AND (EXISTS(SELECT 1 FROM event_cohorts ec JOIN academic_periods ap ON ap.id=ec.academic_period_id WHERE ec.event_id=e.id AND ap.semester=?) OR (NOT EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=e.id) AND e.semester=?))'
+        event_semester_args=[int(semester_filter),int(semester_filter)]
+    elif semester_filter=='Unassigned':
+        event_semester_where=' AND (EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=e.id AND ec.academic_period_id IS NULL) OR (NOT EXISTS(SELECT 1 FROM event_cohorts ec WHERE ec.event_id=e.id) AND e.semester IS NULL))'
+        event_semester_args=[]
+    else: event_semester_args=[]
+    evrows=conn.execute('SELECT e.name,e.event_date,e.semester,(SELECT COUNT(*) FROM event_participants p WHERE p.event_id=e.id AND p.selection_status="Selected") selected,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Present") present,(SELECT COUNT(*) FROM attendance a WHERE a.event_id=e.id AND a.status="Absent") absent FROM events e WHERE 1=1'+event_semester_where+' ORDER BY e.event_date DESC',event_semester_args).fetchall()
+    credit_rows=conn.execute('''SELECT a.id attendance_id,a.credit_points,COALESCE(ap.semester,e.semester) semester,e.name event_name,e.event_date,
         s.id student_id,s.register_no,s.name,s.department
         FROM attendance a JOIN events e ON e.id=a.event_id JOIN students s ON s.id=a.student_id
-        WHERE a.status='Present' '''+semester_where+cohort_clause+''' ORDER BY e.semester,e.event_date,s.name''',semester_args+cohort_args).fetchall()
+        LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id
+        WHERE a.status='Present' '''+semester_where+cohort_clause+''' ORDER BY COALESCE(ap.semester,e.semester),e.event_date,s.name''',semester_args+cohort_args).fetchall()
     credit_totals={}
     for credit_row in credit_rows:
         student=credit_totals.setdefault(credit_row['student_id'],{
@@ -1522,7 +1848,7 @@ def reports():
                            total_attendances=total_attendances,
                            department_counts=department_counts,semester_filter=semester_filter,
                            cohort_filter=cohort_filter,cohorts=[r[0] for r in conn.execute('SELECT DISTINCT cohort FROM students ORDER BY cohort')],
-                           credit_rows=credit_rows,credit_totals=sorted(credit_totals.values(),key=lambda item:item['name']))
+                           credit_rows=credit_rows,credit_totals=sorted(credit_totals.values(),key=lambda item:item['name']),semester_options=semester_options)
 
 @app.post('/reports/attendance/<int:attendance_id>/credit')
 @login_required
@@ -1538,7 +1864,7 @@ def update_attendance_credit(attendance_id):
         flash('Credit points cannot be negative.','error')
         return redirect(url_for('reports',semester=request.form.get('semester','All'),**cohort_args))
     conn=db()
-    row=conn.execute('SELECT a.credit_points,a.status,e.semester,s.cohort FROM attendance a JOIN events e ON e.id=a.event_id JOIN students s ON s.id=a.student_id WHERE a.id=?',(attendance_id,)).fetchone()
+    row=conn.execute('SELECT a.credit_points,a.status,COALESCE(ap.semester,e.semester) semester,s.cohort FROM attendance a JOIN events e ON e.id=a.event_id JOIN students s ON s.id=a.student_id LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id WHERE a.id=?',(attendance_id,)).fetchone()
     if not row or row['status']!='Present':
         flash('Credit can only be marked for a present attendance record.','error')
         return redirect(url_for('reports',semester=request.form.get('semester','All'),**cohort_args))
@@ -1546,7 +1872,7 @@ def update_attendance_credit(attendance_id):
         flash('That student is not part of the selected batch.','error')
         return redirect(url_for('reports',semester=request.form.get('semester','All'),**cohort_args))
     semester_filter=request.form.get('semester','All')
-    if semester_filter in ('1','2','3','4') and row['semester']!=int(semester_filter):
+    if semester_filter.isdigit() and row['semester']!=int(semester_filter):
         flash('That attendance record is not part of the selected semester.','error')
         return redirect(url_for('reports',semester=semester_filter,**cohort_args))
     if semester_filter=='Unassigned' and row['semester'] is not None:
@@ -1574,7 +1900,7 @@ def semester_eligibility_many(semester_id, student_ids):
     min_rule=next((r for r in rules if r['rule_type']=='minimum_activities' and r['mandatory']),None)
     minimum=int(min_rule['value']) if min_rule else 0
     placeholders=','.join('?' for _ in ids)
-    activity_rows=conn.execute("SELECT a.student_id,COUNT(DISTINCT a.event_id) AS activities FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.status='Present' AND e.status<>'Cancelled' AND e.counts_for_eligibility=1 AND e.semester=? AND a.student_id IN ("+placeholders+") GROUP BY a.student_id",[semester_id,*ids]).fetchall() if semester else []
+    activity_rows=conn.execute("SELECT a.student_id,COUNT(DISTINCT a.event_id) AS activities FROM attendance a JOIN events e ON e.id=a.event_id LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id WHERE a.status='Present' AND e.status<>'Cancelled' AND e.counts_for_eligibility=1 AND COALESCE(ap.semester,e.semester)=? AND a.student_id IN ("+placeholders+") GROUP BY a.student_id",[semester_id,*ids]).fetchall() if semester else []
     activities={r['student_id']:r['activities'] for r in activity_rows}
     results={}; history=[]
     for student_id in ids:
@@ -1681,15 +2007,16 @@ def attended_students_csv():
     semester_filter=request.args.get('semester','All')
     semester_where=''
     semester_args=[]
-    if semester_filter in ('1','2','3','4'):
-        semester_where=' AND e.semester=?'
+    if semester_filter.isdigit():
+        semester_where=' AND COALESCE(ap.semester,e.semester)=?'
         semester_args.append(int(semester_filter))
     elif semester_filter=='Unassigned':
-        semester_where=' AND e.semester IS NULL'
+        semester_where=' AND COALESCE(ap.semester,e.semester) IS NULL'
     rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,
         s.id student_id,e.name event_name,e.event_date
         FROM students s JOIN attendance a ON a.student_id=s.id AND a.status='Present'
         JOIN events e ON e.id=a.event_id
+        LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id
         WHERE s.yrc_status='Active' AND e.status<>'Cancelled' '''+semester_where+'''
         ORDER BY s.name,e.event_date,e.name''',semester_args).fetchall()
     attended_by_student={}
@@ -1706,7 +2033,7 @@ def attended_students_csv():
         values=[student['register_no'],student['name'],student['department'],student['class_name'],
                 student['section'],'; '.join(student['events']),len(student['events'])]
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
-    filename=f'yrc-student-event-attendance-semester-{semester_filter}.csv' if semester_filter in ('1','2','3','4') else 'yrc-student-event-attendance.csv'
+    filename=f'yrc-student-event-attendance-semester-{semester_filter}.csv' if semester_filter.isdigit() else 'yrc-student-event-attendance.csv'
     return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename={filename}'})
 
 @app.get('/reports/students.csv')
@@ -1728,14 +2055,14 @@ def priority_students_csv():
     semester_filter=request.args.get('semester','All')
     semester_where=''
     semester_args=[]
-    if semester_filter in ('1','2','3','4'):
-        semester_where=' AND e.semester=?'
+    if semester_filter.isdigit():
+        semester_where=' AND COALESCE(ap.semester,e.semester)=?'
         semester_args.append(int(semester_filter))
     elif semester_filter=='Unassigned':
-        semester_where=' AND e.semester IS NULL'
+        semester_where=' AND COALESCE(ap.semester,e.semester) IS NULL'
     rows=db().execute('''SELECT s.register_no,s.name,s.department,s.class_name,s.section,s.email,s.phone
         FROM students s WHERE s.yrc_status='Active'
-        AND (SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id
+        AND (SELECT COUNT(DISTINCT a.event_id) FROM attendance a JOIN events e ON e.id=a.event_id LEFT JOIN academic_periods ap ON ap.id=a.academic_period_id
              WHERE a.student_id=s.id AND a.status='Present' AND e.status<>'Cancelled' '''+semester_where+''') < 3
         ORDER BY s.department,s.class_name,s.name''',semester_args).fetchall()
     buf=io.StringIO(newline=''); writer=csv.writer(buf)
@@ -1743,7 +2070,7 @@ def priority_students_csv():
     for row in rows:
         values=[row['register_no'],row['name'],row['department'],row['class_name'],row['section'],row['email'],row['phone'],'Below 3-event attendance threshold']
         writer.writerow([("'"+str(value) if str(value or '').lstrip().startswith(('=','+','-','@')) else value) for value in values])
-    filename=f'yrc-below-event-threshold-semester-{semester_filter}.csv' if semester_filter in ('1','2','3','4') else 'yrc-below-event-threshold.csv'
+    filename=f'yrc-below-event-threshold-semester-{semester_filter}.csv' if semester_filter.isdigit() else 'yrc-below-event-threshold.csv'
     return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename={filename}'})
 
 @app.get('/settings')

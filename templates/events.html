@@ -71,7 +71,7 @@
     </select>
     <select name="semester" aria-label="Filter by semester" style="flex:0 0 180px">
       <option value="All" {{'selected' if semester=='All'}}>All semesters</option>
-      {% for x in range(1,5) %}
+      {% for x in semester_options %}
       <option value="{{x}}" {{'selected' if semester==(x|string)}}>Semester {{x}}</option>
       {% endfor %}
       <option value="Unassigned" {{'selected' if semester=='Unassigned'}}>Historical / unassigned</option>
@@ -109,7 +109,7 @@
               </span>
             </a>
           </td>
-          <td>{{'Semester ' ~ e.semester if e.semester else 'Unassigned'}}</td>
+          <td>{{'By batch' if e.cohort_count else ('Semester ' ~ e.semester if e.semester else 'Unassigned')}}</td>
           <td>
             <span style="font-family:var(--font-mono);font-size:12px">{{e.event_date}}</span>
             {% if e.start_time %}<small class="cell-sub">{{e.start_time}}</small>{% endif %}
@@ -172,15 +172,22 @@
       <label>Event name
         <input name="name" required maxlength="160" placeholder="e.g. Community Health Camp">
       </label>
-      <label>Semester
-        <select name="semester" required>
-          <option value="">Choose semester</option>
-          {% for x in range(1,5) %}<option value="{{x}}">Semester {{x}}</option>{% endfor %}
-        </select>
-      </label>
       <label>Date
         <input name="event_date" type="date" required>
       </label>
+      <label>Category
+        <input name="category" maxlength="80" placeholder="e.g. Health, Service, Training">
+      </label>
+      <div class="span-two" style="display:grid;gap:8px">
+        <strong>Participating batches</strong>
+        <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="all_active_cohorts" value="1" checked> All active batches</label>
+        <div class="cohort-choice-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
+          {% for cohort in active_cohorts %}<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="cohort_ids" value="{{cohort.id}}"> {{cohort.name|display_batch}}</label>{% endfor %}
+        </div>
+        <small>To target specific batches, uncheck “All active batches” and select the relevant intakes.</small>
+        <small>Semester mapping comes from each batch's configured calendar. Unconfigured dates stay pending.</small>
+        <a class="text-link" href="{{url_for('academic_calendar')}}">Configure batch calendars</a>
+      </div>
       <label>Start time
         <input name="start_time" type="time">
       </label>

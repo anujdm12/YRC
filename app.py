@@ -142,6 +142,13 @@ def init_db():
         conn.execute(f'ALTER TABLE students ADD COLUMN department_id {department_id_type} REFERENCES departments(id)')
     if 'department_verification' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN department_verification TEXT NOT NULL DEFAULT 'pending'")
+    if 'class_name' not in student_columns:
+        conn.execute("ALTER TABLE students ADD COLUMN class_name TEXT NOT NULL DEFAULT ''")
+    # Older records stored department and program together, separated by an em dash.
+    if USING_POSTGRES:
+        conn.execute("UPDATE students SET class_name=TRIM(SUBSTRING(department FROM POSITION('—' IN department) + 1)), department=TRIM(SUBSTRING(department FROM 1 FOR POSITION('—' IN department) - 1)) WHERE class_name='' AND POSITION('—' IN department) > 0")
+    else:
+        conn.execute("UPDATE students SET class_name=TRIM(SUBSTR(department, INSTR(department, '—') + 1)), department=TRIM(SUBSTR(department, 1, INSTR(department, '—') - 1)) WHERE class_name='' AND INSTR(department, '—') > 0")
     # Create registry entries from the exact legacy labels. Do not infer or rewrite
     # volunteer identity; rows with a blank/unknown label remain unassigned.
     for department_row in conn.execute("SELECT DISTINCT TRIM(department) AS name FROM students WHERE TRIM(department)<>'' ORDER BY 1").fetchall():
@@ -155,10 +162,6 @@ def init_db():
         conn.execute('UPDATE students SET department_id=? WHERE department_id IS NULL AND TRIM(department)=?',(department_id,name))
     conn.execute("UPDATE students SET department_verification='verified' WHERE department_id IS NOT NULL AND department_verification='pending'")
     conn.execute('CREATE INDEX IF NOT EXISTS idx_students_department_id ON students(department_id)')
-    conn.execute('''INSERT OR IGNORE INTO cohort_departments(cohort_id,department_id)
-        SELECT DISTINCT cohort_id,department_id FROM students WHERE cohort_id IS NOT NULL AND department_id IS NOT NULL''')
-    if 'class_name' not in student_columns:
-        conn.execute("ALTER TABLE students ADD COLUMN class_name TEXT NOT NULL DEFAULT ''")
     if 'section' not in student_columns:
         conn.execute("ALTER TABLE students ADD COLUMN section TEXT NOT NULL DEFAULT ''")
     if 'cohort' not in student_columns:
@@ -173,6 +176,8 @@ def init_db():
         conn.execute("INSERT OR IGNORE INTO cohorts(name,status) VALUES(?,'active')",(cohort_row['name'],))
     conn.execute('''UPDATE students SET cohort_id=(SELECT c.id FROM cohorts c WHERE c.name=students.cohort)
         WHERE cohort_id IS NULL AND EXISTS(SELECT 1 FROM cohorts c WHERE c.name=students.cohort)''')
+    conn.execute('''INSERT OR IGNORE INTO cohort_departments(cohort_id,department_id)
+        SELECT DISTINCT cohort_id,department_id FROM students WHERE cohort_id IS NOT NULL AND department_id IS NOT NULL''')
     legacy_batch=conn.execute("SELECT id FROM cohorts WHERE LOWER(TRIM(name))='current batch'").fetchone()
     named_batch=conn.execute("SELECT id FROM cohorts WHERE LOWER(TRIM(name))='2026 batch'").fetchone()
     if legacy_batch and not named_batch:
@@ -200,11 +205,6 @@ def init_db():
     import_row_columns={row[1] for row in conn.execute('PRAGMA table_info(participation_import_rows)')}
     if 'match_method' not in import_row_columns:
         conn.execute("ALTER TABLE participation_import_rows ADD COLUMN match_method TEXT NOT NULL DEFAULT 'register_no'")
-    # Older records stored department and program together, separated by an em dash.
-    if USING_POSTGRES:
-        conn.execute("UPDATE students SET class_name=TRIM(SUBSTRING(department FROM POSITION('—' IN department) + 1)), department=TRIM(SUBSTRING(department FROM 1 FOR POSITION('—' IN department) - 1)) WHERE class_name='' AND POSITION('—' IN department) > 0")
-    else:
-        conn.execute("UPDATE students SET class_name=TRIM(SUBSTR(department, INSTR(department, '—') + 1)), department=TRIM(SUBSTR(department, 1, INSTR(department, '—') - 1)) WHERE class_name='' AND INSTR(department, '—') > 0")
     if USING_POSTGRES:
         conn.execute("INSERT INTO admin_roles(admin_id,role,department) SELECT id,'super_admin','' FROM admins ON CONFLICT (admin_id) DO NOTHING")
     else:
@@ -217,8 +217,6 @@ def init_db():
             conn.execute('''INSERT OR IGNORE INTO admin_department_assignments
                 (admin_id,department_id,role,can_manage_volunteers,can_manage_events,can_view_reports)
                 VALUES(?,?,'department_admin',1,1,0)''',(role_row['admin_id'],department['id']))
-        else:
-            conn.execute("UPDATE admin_roles SET role='super_admin',department='' WHERE admin_id=?",(role_row['admin_id'],))
     conn.execute('''INSERT OR IGNORE INTO event_departments(event_id,department_id)
         SELECT DISTINCT p.event_id,s.department_id FROM event_participants p
         JOIN students s ON s.id=p.student_id WHERE s.department_id IS NOT NULL''')
@@ -774,6 +772,7 @@ def department_update(department_id):
     try:
         conn.execute('UPDATE departments SET name=?,code=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',
             (name,code,status,department_id))
+        conn.execute('UPDATE students SET department=? WHERE department_id=?',(name,department_id))
         conn.execute('UPDATE admin_roles SET department=? WHERE admin_id IN (SELECT admin_id FROM admin_department_assignments WHERE department_id=?) AND role=\'department_admin\'',(name,department_id))
         audit('Department updated','department',department_id,department['name'],name)
         conn.commit(); flash('Department details and assignments saved.','success')
@@ -861,12 +860,14 @@ def cohort_management():
     dept_clause=' AND s.department_id IN ('+','.join('?' for _ in g.admin_department_ids)+')' if g.admin['role']=='department_admin' else ''
     dept_args=tuple(g.admin_department_ids) if dept_clause else ()
     cohort_scope=' OR EXISTS(SELECT 1 FROM cohort_departments x WHERE x.cohort_id=c.id AND x.department_id IN ('+','.join('?' for _ in g.admin_department_ids)+'))' if dept_clause else ''
+    cohort_membership=(' WHERE EXISTS(SELECT 1 FROM students s WHERE s.cohort_id=c.id'+dept_clause+')'
+        if dept_clause else '')
     cohorts=conn.execute('''SELECT c.*,
         (SELECT COUNT(*) FROM students s WHERE s.cohort_id=c.id'''+dept_clause+''') volunteer_count,
         (SELECT COUNT(*) FROM students s WHERE s.cohort_id=c.id AND s.yrc_status='Active' '''+dept_clause+''') active_count,
         (SELECT COUNT(*) FROM students s WHERE s.cohort_id=c.id AND s.cohort_verification='pending' '''+dept_clause+''') pending_count,
         (SELECT COUNT(*) FROM event_participants p JOIN students s ON s.id=p.student_id WHERE s.cohort_id=c.id AND p.selection_status='Selected' '''+dept_clause+''') participation_count
-        FROM cohorts c WHERE EXISTS(SELECT 1 FROM students s WHERE s.cohort_id=c.id'''+dept_clause+')'+cohort_scope+''' ORDER BY COALESCE(c.admission_year,9999),c.name''',dept_args*6).fetchall()
+        FROM cohorts c'''+cohort_membership+cohort_scope+''' ORDER BY COALESCE(c.admission_year,9999),c.name''',dept_args*6).fetchall()
     mappings=[] if g.admin['role']=='department_admin' else conn.execute('''SELECT m.prefix,m.active,c.id cohort_id,c.name cohort_name,c.status cohort_status
         FROM cohort_prefix_mappings m JOIN cohorts c ON c.id=m.cohort_id ORDER BY m.prefix''').fetchall()
     pending_rows=conn.execute(f"SELECT id,register_no,name,department,year,cohort FROM students WHERE cohort_verification='pending' AND department_id IN ({','.join('?' for _ in g.admin_department_ids)}) ORDER BY register_no,name",tuple(g.admin_department_ids)).fetchall() if g.admin['role']=='department_admin' else conn.execute("SELECT id,register_no,name,department,year,cohort FROM students WHERE cohort_verification='pending' ORDER BY register_no,name").fetchall()
@@ -954,8 +955,12 @@ def student_cohort_assign(sid):
     cohort_sql="SELECT c.name FROM cohorts c WHERE c.id=? AND c.status='active'"
     cohort_args=[cohort_id]
     if g.admin['role']=='department_admin':
-        cohort_sql+=f" AND EXISTS(SELECT 1 FROM cohort_departments x WHERE x.cohort_id=c.id AND x.department_id IN ({','.join('?' for _ in g.admin_department_ids)}))"
-        cohort_args.extend(g.admin_department_ids)
+        department_placeholders=','.join('?' for _ in g.admin_department_ids)
+        cohort_sql+=f""" AND (
+            EXISTS(SELECT 1 FROM cohort_departments x WHERE x.cohort_id=c.id AND x.department_id IN ({department_placeholders}))
+            OR EXISTS(SELECT 1 FROM students s WHERE s.cohort_id=c.id AND s.department_id IN ({department_placeholders}))
+        )"""
+        cohort_args.extend((*g.admin_department_ids,*g.admin_department_ids))
     cohort=conn.execute(cohort_sql,cohort_args).fetchone()
     if not student or not cohort:
         flash('Choose a valid student and cohort. No records were changed.','error'); return redirect(url_for('cohort_management'))
@@ -1018,7 +1023,7 @@ def import_students():
         flash('The CSV has no student rows. No students were imported.','error'); return redirect(url_for('students'))
     conn=db()
     try:
-        records=[record[:11]+(ensure_cohort(conn,record[10]) if record[12]=='manual' else record[11],record[12]) for record in records]
+        records=[record[:12]+(ensure_cohort(conn,record[11]) if record[13]=='manual' else record[12],record[13]) for record in records]
         conn.executemany('INSERT INTO students(register_no,name,department,department_id,department_verification,class_name,section,year,email,phone,yrc_status,cohort,cohort_id,cohort_verification) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',records)
         audit('Student CSV imported','student',0,'',f'{len(records)} added'); conn.commit()
     except DB_INTEGRITY_ERROR:
@@ -1267,7 +1272,7 @@ def student_convenor_photo(filename):
     if photo and photo['photo_data'] is not None:
         if not session.get('admin_id'): return 'Photo not found',404
         response=Response(bytes(photo['photo_data']),mimetype='image/jpeg')
-        response.headers['Cache-Control']='private, max-age=3600'
+        response.headers['Cache-Control']='no-store'
         return response
     photo=db().execute('''SELECT photo_data,department_id,status,active_from,active_until
         FROM department_leadership_appointments WHERE photo=?''',('uploads/convenors/'+filename,)).fetchone()
@@ -1287,7 +1292,7 @@ def student_convenor_photo(filename):
             (photo['active_until'] and photo['active_until']<today)):
             return 'Photo not found',404
     response=Response(bytes(photo['photo_data']),mimetype='image/jpeg')
-    response.headers['Cache-Control']='private, max-age=3600'
+    response.headers['Cache-Control']='no-store'
     return response
 
 @app.post('/students/<int:sid>/credentials')

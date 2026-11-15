@@ -4,8 +4,11 @@
   const nonce = overlay.dataset.adminWelcome;
   const key = `yrc-admin-welcome-${nonce}`;
   const read = () => {
-    try { return localStorage.getItem(key); }
-    catch (_) { try { return sessionStorage.getItem(key); } catch (__) { return null; } }
+    try {
+      const value = localStorage.getItem(key);
+      if (value !== null) return value;
+    } catch (_) {}
+    try { return sessionStorage.getItem(key); } catch (_) { return null; }
   };
   const write = () => {
     try { localStorage.setItem(key, 'shown'); }

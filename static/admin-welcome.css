@@ -18,3 +18,7 @@
 @keyframes admin-orbit{to{rotate:360deg}}@keyframes admin-grid-drift{to{background-position:0 58px,58px 0}}@keyframes admin-pulse{50%{opacity:.35;box-shadow:0 0 3px var(--brand,#a10829)}}@keyframes admin-emblem{50%{transform:rotateY(18deg) scale(1.04)}}
 @media(max-width:600px){.admin-welcome{padding:15px}.admin-welcome-card{padding:27px 19px;border-radius:17px}.admin-welcome-orbit{width:95vw}.orbit-two{width:78vw}.admin-welcome-status{gap:6px;font-size:8px}.admin-welcome-line{width:14px}.admin-welcome-emblem{width:76px;height:76px;margin:21px auto 17px}.admin-welcome-foot{font-size:6px}}
 @media(prefers-reduced-motion:reduce){.admin-welcome-grid,.admin-welcome-orbit,.admin-welcome-kicker span,.admin-welcome-emblem{animation:none}.admin-welcome,.admin-welcome-card{transition:none}}
+.admin-welcome{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;overflow-y:auto;overscroll-behavior:contain}
+.admin-welcome-skip{position:fixed}
+.admin-welcome-card{flex:0 0 auto;max-height:calc(100vh - 48px);overflow-y:auto;overscroll-behavior:contain;margin-block:auto}
+@media(max-width:600px){.admin-welcome-card{max-height:calc(100vh - 30px);max-height:calc(100dvh - 30px)}}

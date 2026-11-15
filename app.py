@@ -543,17 +543,18 @@ def volunteer_home():
         student_convenors=conn.execute('''SELECT c.id,c.name,
                 CASE WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%secretar%'
                        OR LOWER(COALESCE(c.role,'')) LIKE '%secretar%'
-                     THEN 'department_secretary' ELSE 'department_leader' END AS role,
+                     THEN 'department_secretary'
+                     WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%leader%'
+                       OR LOWER(COALESCE(c.role,'')) LIKE '%leader%'
+                     THEN 'department_leader' ELSE 'department_convenor' END AS role,
                 c.coordinator_title,c.phone,c.email,c.photo,d.name AS department_name
             FROM student_convenors c JOIN departments d ON d.id=c.department_id
             WHERE c.department_id=? AND c.active=1 AND d.status='active'
-              AND (LOWER(COALESCE(c.coordinator_title,'')) LIKE '%leader%'
-                   OR LOWER(COALESCE(c.coordinator_title,'')) LIKE '%secretar%'
-                   OR LOWER(COALESCE(c.role,'')) LIKE '%leader%'
-                   OR LOWER(COALESCE(c.role,'')) LIKE '%secretar%')
             ORDER BY CASE WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%secretar%'
                                 OR LOWER(COALESCE(c.role,'')) LIKE '%secretar%'
-                          THEN 1 ELSE 0 END,c.sort_order,c.id''',
+                          THEN 1 WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%leader%'
+                                OR LOWER(COALESCE(c.role,'')) LIKE '%leader%'
+                          THEN 0 ELSE 2 END,c.sort_order,c.id''',
             (student['department_id'],)).fetchall()
         has_leader=any(person['role']=='department_leader' for person in student_convenors)
         has_secretary=any(person['role']=='department_secretary' for person in student_convenors)

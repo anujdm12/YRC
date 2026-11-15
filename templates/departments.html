@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block title %}Departments{% endblock %}
+{% block crumb %}DEPARTMENT MANAGEMENT{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">CENTRAL ADMINISTRATION // DEPARTMENT DIRECTORY</div><h1>Department management</h1><p class="subhead">Manage the department registry, status, leaders, and assigned administrators.</p></div></div>
+<div class="stats-grid">
+  <article class="stat-card"><span class="stat-label">DEPARTMENTS</span><strong>{{departments|length}}</strong><span class="stat-foot">Registered departments</span></article>
+  <article class="stat-card"><span class="stat-label">ACTIVE</span><strong>{{departments|selectattr('status','equalto','active')|list|length}}</strong><span class="stat-foot">Available for assignments</span></article>
+  <article class="stat-card"><span class="stat-label">VOLUNTEERS</span><strong>{{departments|sum(attribute='volunteer_count')}}</strong><span class="stat-foot">Linked to registered departments</span></article>
+</div>
+<section class="panel"><div class="panel-head"><div><h2>Add a department</h2><p>Department codes are unique and remain stable after creation.</p></div></div>
+<form class="form-grid" method="post" action="{{url_for('department_management')}}">
+  <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+  <label>Department name<input name="name" required maxlength="120" placeholder="e.g. Computational Studies"></label>
+  <label>Department code<input name="code" required minlength="2" maxlength="20" pattern="[A-Za-z0-9_-]{2,20}" placeholder="e.g. COMP"></label>
+  <div class="modal-actions" style="grid-column:1/-1"><button class="btn primary" type="submit">Create department</button></div>
+</form></section>
+<section class="panel"><div class="panel-head"><div><h2>Department directory</h2><p>Existing student department labels were imported into this registry during the additive startup migration.</p></div></div>
+<div class="table-scroll"><table><thead><tr><th>DEPARTMENT</th><th>VOLUNTEERS</th><th>LEADERSHIP</th><th>ADMINS</th><th>STATUS</th><th>DEPARTMENT DETAILS</th></tr></thead><tbody>
+{% for d in departments %}<tr><td><b>{{d.name}}</b><div class="cell-sub">{{d.code}}</div></td><td>{{d.volunteer_count}}</td><td>Manage appointments</td><td>{{d.admin_count}}</td><td><span class="badge {{'active' if d.status=='active' else 'inactive'}}">{{d.status|title}}</span></td><td>
+<form method="post" action="{{url_for('department_update',department_id=d.id)}}" class="form-grid">
+  <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+  <input name="name" required maxlength="120" value="{{d.name}}" aria-label="Department name">
+  <input name="code" required minlength="2" maxlength="20" pattern="[A-Za-z0-9_-]{2,20}" value="{{d.code}}" aria-label="Department code">
+  <select name="status" aria-label="Department status"><option value="active" {{'selected' if d.status=='active'}}>Active</option><option value="inactive" {{'selected' if d.status=='inactive'}}>Inactive</option></select>
+  <button class="btn secondary small" type="submit">Save</button>
+</form></td></tr>
+{% else %}<tr><td colspan="6" class="empty-cell">No departments are registered.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

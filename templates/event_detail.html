@@ -15,6 +15,7 @@
 .bulk-student-option strong { color: #ffffff; font-size: 12.5px; }
 .bulk-student-option small { overflow: hidden; color: var(--text-muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .bulk-student-option[hidden] { display: none !important; }
+.student-search-option[hidden] { display: none !important; }
 .bulk-picker .picker-selection { margin-top: 14px; }
 @media (max-width: 520px) {
   .bulk-picker { width: calc(100vw - 20px); padding: 18px 14px; }
@@ -368,6 +369,7 @@
         for(const opt of options){
           const match=opt.dataset.search.includes(query);
           opt.hidden=!match;
+          opt.style.display=match?'':'none';
           if(match)count++;
         }
         if(empty)empty.hidden=count>0;

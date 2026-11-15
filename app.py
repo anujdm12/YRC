@@ -159,6 +159,13 @@ def init_db():
             conn.execute("UPDATE students SET cohort='2026 batch',cohort_id=? WHERE LOWER(TRIM(cohort))='current batch' OR cohort_id=?",(named_batch['id'],legacy_batch['id'] if legacy_batch else -1))
             conn.execute("UPDATE cohort_prefix_mappings SET active=CASE WHEN cohort_id=? THEN active ELSE 0 END",(named_batch['id'],))
         conn.execute("INSERT INTO app_migrations(name) VALUES('keep_only_2026_batch_active')")
+    if not conn.execute("SELECT 1 FROM app_migrations WHERE name='assign_existing_students_to_2026_batch'").fetchone():
+        batch=conn.execute("SELECT id FROM cohorts WHERE LOWER(TRIM(name))='2026 batch'").fetchone()
+        if not batch:
+            cur=conn.execute("INSERT INTO cohorts(name,admission_year,status) VALUES('2026 batch',2026,'active')")
+            batch={'id':cur.lastrowid}
+        conn.execute("UPDATE students SET cohort='2026 batch',cohort_id=?",(batch['id'],))
+        conn.execute("INSERT INTO app_migrations(name) VALUES('assign_existing_students_to_2026_batch')")
     conn.execute('CREATE INDEX IF NOT EXISTS idx_students_cohort_id ON students(cohort_id)')
     period_columns={row[1] for row in conn.execute('PRAGMA table_info(event_participants)')}
     if 'academic_period_id' not in period_columns:

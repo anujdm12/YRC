@@ -88,7 +88,7 @@ body {
   padding: 0;
   min-height: 100vh;
   background-color: var(--bg-void) !important;
-  background-image:
+  background-image: 
     radial-gradient(circle at 85% 10%, rgba(227, 24, 55, 0.12) 0%, transparent 45%),
     radial-gradient(circle at 15% 60%, rgba(148, 10, 32, 0.08) 0%, transparent 50%),
     radial-gradient(circle at 50% 90%, rgba(16, 185, 129, 0.04) 0%, transparent 45%),
@@ -123,7 +123,7 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 1;
-  background-image:
+  background-image: 
     linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
   background-size: 48px 48px;
@@ -139,8 +139,8 @@ body::before {
   width: 0% !important;
   height: 3px !important;
   background: linear-gradient(90deg, #990a22, #ff1e42 65%, #ff8099 100%) !important;
-  box-shadow:
-    0 0 10px #ff1e42,
+  box-shadow: 
+    0 0 10px #ff1e42, 
     0 0 20px rgba(255, 30, 66, 0.8),
     0 0 35px rgba(255, 30, 66, 0.5) !important;
   z-index: 99999 !important;
@@ -296,11 +296,11 @@ h2 {
   right: -1px;
   width: 1px;
   height: 100%;
-  background: linear-gradient(180deg,
-    transparent 0%,
-    rgba(227, 24, 55, 0.45) 30%,
-    rgba(255, 30, 66, 0.7) 50%,
-    rgba(227, 24, 55, 0.45) 70%,
+  background: linear-gradient(180deg, 
+    transparent 0%, 
+    rgba(227, 24, 55, 0.45) 30%, 
+    rgba(255, 30, 66, 0.7) 50%, 
+    rgba(227, 24, 55, 0.45) 70%, 
     transparent 100%);
   pointer-events: none;
   opacity: 0.8;
@@ -325,7 +325,7 @@ h2 {
   background: #ffffff !important;
   padding: 2px !important;
   border: 1.5px solid rgba(255, 255, 255, 0.8) !important;
-  box-shadow:
+  box-shadow: 
     0 0 0 3px rgba(227, 24, 55, 0.25),
     0 8px 24px rgba(227, 24, 55, 0.35) !important;
   transition: var(--transition-spring) !important;
@@ -333,7 +333,7 @@ h2 {
 
 .brand:hover .brand-logo {
   transform: scale(1.05) rotate(2deg);
-  box-shadow:
+  box-shadow: 
     0 0 0 4px rgba(255, 30, 66, 0.4),
     0 0 32px rgba(255, 30, 66, 0.55) !important;
 }
@@ -432,7 +432,7 @@ h2 {
   font-weight: 600 !important;
   background: linear-gradient(90deg, rgba(227, 24, 55, 0.22) 0%, rgba(148, 10, 32, 0.08) 100%) !important;
   border-color: var(--border-crimson) !important;
-  box-shadow:
+  box-shadow: 
     0 4px 20px rgba(0, 0, 0, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
     inset 3px 0 0 var(--crimson-vivid) !important;
@@ -593,11 +593,11 @@ h2 {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg,
-    transparent 0%,
-    rgba(227, 24, 55, 0.5) 25%,
-    rgba(255, 30, 66, 0.9) 50%,
-    rgba(227, 24, 55, 0.5) 75%,
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(227, 24, 55, 0.5) 25%, 
+    rgba(255, 30, 66, 0.9) 50%, 
+    rgba(227, 24, 55, 0.5) 75%, 
     transparent 100%) !important;
   opacity: 0.75;
 }
@@ -792,7 +792,7 @@ h2 {
   color: #ffffff !important;
   background: linear-gradient(135deg, #ff1e42 0%, #e31837 50%, #990a22 100%) !important;
   border: 1px solid rgba(255, 255, 255, 0.25) !important;
-  box-shadow:
+  box-shadow: 
     0 4px 18px rgba(227, 24, 55, 0.35),
     0 0 35px rgba(255, 30, 66, 0.2),
     inset 0 1px 0 rgba(255, 255, 255, 0.35) !important;
@@ -811,7 +811,7 @@ h2 {
 
 .btn.primary:hover {
   transform: translateY(-2px) scale(1.015) !important;
-  box-shadow:
+  box-shadow: 
     0 8px 28px rgba(227, 24, 55, 0.5),
     0 0 50px rgba(255, 30, 66, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
@@ -832,7 +832,7 @@ h2 {
 .btn.secondary:hover, .btn.hero-ghost:hover {
   background: rgba(255, 255, 255, 0.08) !important;
   border-color: var(--border-crimson) !important;
-  box-shadow:
+  box-shadow: 
     0 0 20px rgba(227, 24, 55, 0.25),
     var(--specular-top) !important;
   transform: translateY(-2px) !important;
@@ -880,13 +880,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   -webkit-backdrop-filter: blur(24px) saturate(160%) !important;
   border: 1px solid var(--border-subtle) !important;
   border-radius: var(--radius-lg) !important;
-  box-shadow:
+  box-shadow: 
     var(--specular-top),
     var(--shadow-md) !important;
   padding: 24px 26px !important;
-  transition:
-    transform var(--transition-smooth),
-    border-color var(--transition-smooth),
+  transition: 
+    transform var(--transition-smooth), 
+    border-color var(--transition-smooth), 
     box-shadow var(--transition-smooth),
     background var(--transition-smooth) !important;
   overflow: hidden !important;
@@ -956,7 +956,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 .panel:hover, .stat-card:hover, .semester-card:hover, .overview-tile:hover {
   border-color: var(--border-crimson) !important;
-  box-shadow:
+  box-shadow: 
     var(--specular-top),
     0 24px 60px -10px rgba(0, 0, 0, 0.75),
     0 0 32px rgba(227, 24, 55, 0.16) !important;
@@ -1109,11 +1109,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   padding: 28px 32px !important;
   margin-bottom: 24px !important;
   border-radius: var(--radius-xl) !important;
-  background:
+  background: 
     radial-gradient(circle at 82% 40%, rgba(227, 24, 55, 0.22) 0%, transparent 45%),
     linear-gradient(135deg, rgba(28, 14, 20, 0.96) 0%, rgba(14, 14, 20, 0.95) 55%, rgba(40, 10, 20, 0.94) 100%) !important;
   border: 1px solid var(--border-crimson) !important;
-  box-shadow:
+  box-shadow: 
     0 20px 60px rgba(0, 0, 0, 0.5),
     0 0 40px rgba(227, 24, 55, 0.15),
     var(--specular-top) !important;
@@ -1196,7 +1196,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 /* Fairness Equity Panel */
 .fairness-panel {
-  background:
+  background: 
     radial-gradient(circle at 90% 10%, rgba(227, 24, 55, 0.16) 0%, transparent 40%),
     linear-gradient(145deg, rgba(26, 16, 22, 0.95), rgba(16, 14, 20, 0.98)) !important;
 }
@@ -1424,7 +1424,7 @@ input:not([type=checkbox]):not([type=radio]), select, textarea {
 
 input:focus, select:focus, textarea:focus {
   border-color: var(--crimson-vivid) !important;
-  box-shadow:
+  box-shadow: 
     0 0 0 3px rgba(227, 24, 55, 0.18),
     0 0 20px rgba(255, 30, 66, 0.25) !important;
   background: rgba(14, 14, 22, 0.95) !important;
@@ -1725,7 +1725,7 @@ dialog.modal, .student-picker {
   background: linear-gradient(150deg, rgba(24, 20, 30, 0.98), rgba(12, 12, 18, 0.99)) !important;
   backdrop-filter: blur(32px) saturate(180%) !important;
   -webkit-backdrop-filter: blur(32px) saturate(180%) !important;
-  box-shadow:
+  box-shadow: 
     0 35px 90px rgba(0, 0, 0, 0.8),
     0 0 60px rgba(227, 24, 55, 0.2),
     var(--specular-top) !important;
@@ -1813,11 +1813,11 @@ dialog.modal[open] {
   padding: 34px 38px !important;
   margin-bottom: 24px !important;
   border-radius: var(--radius-xl) !important;
-  background:
+  background: 
     radial-gradient(circle at 85% 85%, rgba(227, 24, 55, 0.3) 0%, transparent 45%),
     linear-gradient(135deg, #18050c 0%, #3d0815 50%, #730d1e 100%) !important;
   border: 1px solid var(--border-crimson-bright) !important;
-  box-shadow:
+  box-shadow: 
     0 24px 70px rgba(0, 0, 0, 0.6),
     0 0 50px rgba(227, 24, 55, 0.25),
     var(--specular-top) !important;
@@ -2069,7 +2069,7 @@ dialog.modal[open] {
   display: grid !important;
   grid-template-columns: minmax(420px, 1.15fr) minmax(380px, 0.85fr) !important;
   background-color: var(--bg-void) !important;
-  background-image:
+  background-image: 
     radial-gradient(circle at 15% 25%, rgba(227, 24, 55, 0.18) 0%, transparent 45%),
     radial-gradient(circle at 85% 75%, rgba(148, 10, 32, 0.14) 0%, transparent 50%),
     linear-gradient(135deg, #050508 0%, #0c0810 50%, #050508 100%) !important;
@@ -2095,7 +2095,7 @@ dialog.modal[open] {
   justify-content: space-between !important;
   padding: clamp(32px, 5vw, 64px) !important;
   border-right: 1px solid var(--border-medium) !important;
-  background:
+  background: 
     radial-gradient(circle at 50% 50%, rgba(227, 24, 55, 0.12) 0%, transparent 60%),
     linear-gradient(135deg, rgba(16, 12, 20, 0.6) 0%, rgba(8, 8, 12, 0.8) 100%) !important;
   backdrop-filter: blur(12px) !important;
@@ -2114,7 +2114,7 @@ dialog.modal[open] {
   width: 50px !important;
   height: 50px !important;
   border-radius: 14px !important;
-  box-shadow:
+  box-shadow: 
     0 0 0 3px rgba(227, 24, 55, 0.3),
     0 0 30px rgba(255, 30, 66, 0.4) !important;
 }
@@ -2193,12 +2193,12 @@ dialog.modal[open] {
   width: 380px !important;
   height: 380px !important;
   border-radius: 50% !important;
-  background: radial-gradient(circle at 35% 35%,
-    rgba(255, 30, 66, 0.35) 0%,
-    rgba(227, 24, 55, 0.15) 45%,
+  background: radial-gradient(circle at 35% 35%, 
+    rgba(255, 30, 66, 0.35) 0%, 
+    rgba(227, 24, 55, 0.15) 45%, 
     transparent 70%) !important;
   border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  box-shadow:
+  box-shadow: 
     0 0 0 35px rgba(227, 24, 55, 0.05),
     0 0 0 85px rgba(255, 255, 255, 0.02),
     0 0 100px rgba(227, 24, 55, 0.3),
@@ -2230,7 +2230,7 @@ dialog.modal[open] {
   backdrop-filter: blur(36px) saturate(190%) !important;
   -webkit-backdrop-filter: blur(36px) saturate(190%) !important;
   border: 1px solid var(--border-medium) !important;
-  box-shadow:
+  box-shadow: 
     0 30px 80px rgba(0, 0, 0, 0.75),
     0 0 50px rgba(227, 24, 55, 0.22),
     var(--specular-top) !important;
@@ -2372,7 +2372,7 @@ dialog.modal[open] {
   .welcome-row > .btn {
     width: 100% !important;
   }
-
+  
   .mobile-nav {
     position: fixed !important;
     bottom: max(14px, env(safe-area-inset-bottom)) !important;
@@ -2454,10 +2454,4 @@ dialog.modal[open] {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* Reading copy alignment */
-p, .subhead, .field-help, .settings-note, .event-description, .login-note {
-  text-align: justify !important;
-  text-justify: inter-word;
 }

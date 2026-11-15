@@ -1,79 +1,54 @@
 {% extends 'base.html' %}
-{% block title %}Manage Student Convenors{% endblock %}
-{% block crumb %}<a href="/students">STUDENTS</a> / STUDENT CONVENORS{% endblock %}
-
+{% block title %}Convenor Contacts{% endblock %}
+{% block crumb %}<a href="/students">STUDENTS</a> / CONVENOR CONTACTS{% endblock %}
 {% block content %}
 <div class="backline"><a href="/students">&larr; Return to students</a></div>
-<div class="page-heading" style="margin-top:14px">
-  <div>
-    <div class="eyebrow">VOLUNTEER HOME CONTENT</div>
-    <h1>Student Convenors</h1>
-    <p class="subhead">Edit names, roles, coordinator titles, contacts, and photos shown to signed-in students.</p>
-  </div>
-</div>
+<div class="page-heading" style="margin-top:14px"><div><div class="eyebrow">VOLUNTEER HOME CONTENT</div><h1>Convenor contacts</h1><p class="subhead">Assign each contact to a department and manage their contact details and photograph.</p></div></div>
 
-<section class="panel convenor-editor">
-  <div class="panel-head"><div><h2>Add a convenor</h2><p>Upload a JPG, PNG, or WebP photo under 5 MB.</p></div></div>
-  <form method="post" enctype="multipart/form-data" class="convenor-form">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="action" value="add">
-    <div class="form-grid">
-      <label>Name<input name="name" maxlength="120" required></label>
-      <label>Role<input name="role" maxlength="80" value="DEPARTMENT LEADER" required></label>
-      <label>Coordinator title<input name="coordinator_title" maxlength="80" value="Student Coordinator" required></label>
-      <label>Phone<input name="phone" maxlength="40" type="tel"></label>
-      <label>Email<input name="email" maxlength="160" type="email"></label>
-      <label class="span-two">Photo<input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required></label>
-    </div>
-    <div class="modal-actions"><button class="btn primary" type="submit">Add convenor</button></div>
-  </form>
-</section>
+<details class="panel" open>
+  <summary><b>Department-assigned volunteer contacts</b><span class="cell-sub">Choose a department for each contact below.</span></summary>
 
-<div class="convenor-editor-list">
-  {% for person in convenors %}
   <section class="panel convenor-editor">
-    <div class="convenor-editor-head">
-      <div>
-        {% if person.active %}<span class="badge active">VISIBLE TO STUDENTS</span>{% else %}<span class="badge inactive">HIDDEN</span>{% endif %}
-        <h2>{{ person.name }}</h2>
-      </div>
-      {% if person.photo.startswith('uploads/convenors/') %}
-      <img class="convenor-admin-photo" src="{{ url_for('student_convenor_photo',filename=person.photo.rsplit('/',1)[-1]) }}" alt="{{ person.name }}">
-      {% elif person.photo %}
-      <img class="convenor-admin-photo" src="{{ url_for('static',filename=person.photo) }}" alt="{{ person.name }}">
-      {% else %}
-      <div class="convenor-photo-placeholder" aria-hidden="true">{{ person.name[0]|upper }}</div>
-      {% endif %}
-    </div>
+    <div class="panel-head"><div><h2>Add a volunteer contact</h2><p>Assign the contact to a department for photo reuse and department organisation.</p></div></div>
     <form method="post" enctype="multipart/form-data" class="convenor-form">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="action" value="save">
-      <input type="hidden" name="id" value="{{ person.id }}">
+      <input type="hidden" name="_csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="add">
       <div class="form-grid">
-        <label>Name<input name="name" maxlength="120" value="{{ person.name }}" required></label>
-        <label>Role<input name="role" maxlength="80" value="{{ person.role }}" required></label>
-        <label>Coordinator title<input name="coordinator_title" maxlength="80" value="{{ person.coordinator_title }}" required></label>
-        <label>Phone<input name="phone" maxlength="40" type="tel" value="{{ person.phone }}"></label>
-        <label>Email<input name="email" maxlength="160" type="email" value="{{ person.email }}"></label>
-        <label>Display order<input name="sort_order" type="number" min="0" max="10000" value="{{ person.sort_order }}" required></label>
-        <label class="convenor-active"><input type="checkbox" name="active" value="1" {{ 'checked' if person.active else '' }}> Show on student home</label>
-        <label class="span-two">Replace photo<input name="photo" type="file" accept="image/jpeg,image/png,image/webp"><small>Leave empty to keep the current photo.</small></label>
+        <label>Name<input name="name" maxlength="120" required></label>
+        <label>Department<select name="department_id" required><option value="">Choose department</option>{% for department in departments %}<option value="{{department.id}}">{{department.name}}</option>{% endfor %}</select></label>
+        <label>Contact title<input name="coordinator_title" maxlength="80" value="Student Coordinator" required></label>
+        <label>Phone<input name="phone" maxlength="40" type="tel"></label>
+        <label>Email<input name="email" maxlength="160" type="email"></label>
+        <label class="span-two">Photo<input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required></label>
       </div>
-      <div class="modal-actions">
-        <button class="btn primary" type="submit">Save changes</button>
-      </div>
+      <div class="modal-actions"><button class="btn primary" type="submit">Add contact</button></div>
     </form>
-    {% if person.active %}
-    <form method="post" class="convenor-hide-form">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="action" value="hide">
-      <input type="hidden" name="id" value="{{ person.id }}">
-      <button class="btn secondary small" type="submit">Remove from student home</button>
-    </form>
-    {% endif %}
   </section>
-  {% else %}
-  <section class="panel"><p>No convenors yet. Add one above to show it on the student home.</p></section>
-  {% endfor %}
-</div>
+
+  <div class="convenor-editor-list">
+  {% for person in convenors %}
+    <section class="panel convenor-editor">
+      <div class="convenor-editor-head"><div>{% if person.active %}<span class="badge active">CONTACT ACTIVE</span>{% else %}<span class="badge inactive">HIDDEN</span>{% endif %}<h2>{{person.name}}</h2><div class="cell-sub">{{person.department_name or 'Department not assigned'}}</div></div>
+        {% if person.photo.startswith('uploads/convenors/') %}<img class="convenor-admin-photo" src="{{url_for('student_convenor_photo',filename=person.photo.rsplit('/',1)[-1])}}" alt="{{person.name}}">
+        {% elif person.photo %}<img class="convenor-admin-photo" src="{{url_for('static',filename=person.photo)}}" alt="{{person.name}}">
+        {% else %}<div class="convenor-photo-placeholder" aria-hidden="true">{{person.name[0]|upper}}</div>{% endif %}
+      </div>
+      <form method="post" enctype="multipart/form-data" class="convenor-form">
+        <input type="hidden" name="_csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="{{person.id}}">
+        <div class="form-grid">
+          <label>Name<input name="name" maxlength="120" value="{{person.name}}" required></label>
+          <label>Department<select name="department_id" required><option value="">Choose department</option>{% for department in departments %}<option value="{{department.id}}" {{'selected' if person.department_id==department.id}}>{{department.name}}</option>{% endfor %}</select></label>
+          <label>Contact title<input name="coordinator_title" maxlength="80" value="{{person.coordinator_title}}" required></label>
+          <label>Phone<input name="phone" maxlength="40" type="tel" value="{{person.phone}}"></label>
+          <label>Email<input name="email" maxlength="160" type="email" value="{{person.email}}"></label>
+          <label>Display order<input name="sort_order" type="number" min="0" max="10000" value="{{person.sort_order}}" required></label>
+          <label class="convenor-active"><input type="checkbox" name="active" value="1" {{'checked' if person.active else ''}}> Keep contact active</label>
+          <label class="span-two">Replace photo<input name="photo" type="file" accept="image/jpeg,image/png,image/webp"><small>Leave empty to keep the current photo.</small></label>
+        </div>
+        <div class="modal-actions"><button class="btn primary" type="submit">Save changes</button></div>
+      </form>
+      {% if person.active %}<form method="post" class="convenor-hide-form"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="hide"><input type="hidden" name="id" value="{{person.id}}"><button class="btn secondary small" type="submit">Hide contact</button></form>{% endif %}
+    </section>
+  {% else %}<section class="panel"><p>No volunteer contacts yet. Add one above.</p></section>{% endfor %}
+  </div>
+</details>
 {% endblock %}

@@ -57,7 +57,7 @@
     <label>Semester
       <select name="semester">
         <option value="All" {{'selected' if semester_filter=='All'}}>All semesters</option>
-        {% for semester_number in semester_options %}
+        {% for semester_number in range(1,5) %}
         <option value="{{semester_number}}" {{'selected' if semester_filter==(semester_number|string)}}>Semester {{semester_number}}</option>
         {% endfor %}
         <option value="Unassigned" {{'selected' if semester_filter=='Unassigned'}}>Historical / unassigned</option>

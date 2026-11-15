@@ -1,0 +1,18 @@
+{% if session.get('admin_id') and session.get('admin_welcome_nonce') %}
+<section class="admin-welcome" data-admin-welcome="{{session.admin_welcome_nonce}}" data-admin-name="{{session.get('admin_display_name',session.get('username','Admin'))}}" role="dialog" aria-modal="true" aria-labelledby="admin-welcome-title" aria-describedby="admin-welcome-copy" hidden>
+  <div class="admin-welcome-grid" aria-hidden="true"></div>
+  <span class="admin-welcome-orbit orbit-one" aria-hidden="true"></span><span class="admin-welcome-orbit orbit-two" aria-hidden="true"></span>
+  <button class="admin-welcome-skip" type="button">Skip intro <kbd>ESC</kbd></button>
+  <div class="admin-welcome-card">
+    <div class="admin-welcome-kicker"><span></span> YRC SYS // AUTHENTICATED ADMIN WORKSPACE</div>
+    <div class="admin-welcome-emblem" aria-hidden="true"><span>YRC</span></div>
+    <p class="admin-welcome-role">{{'SUPER ADMIN' if session.get('admin_role')=='super_admin' else 'DEPARTMENT ADMIN'}} <i></i> {{session.get('admin_department_label','All Departments')}}</p>
+    <h1 id="admin-welcome-title">Welcome, {{session.get('admin_display_name',session.get('username','Admin'))}}.</h1>
+    <p id="admin-welcome-copy" class="admin-welcome-copy">Your secure command workspace is ready. Continue to your dashboard to manage YRC operations.</p>
+    <div class="admin-welcome-status"><span class="admin-welcome-check">✓</span><span>Identity verified</span><span class="admin-welcome-line"></span><span>Workspace synchronised</span></div>
+    <button class="admin-welcome-enter" type="button">Enter workspace <span>↗</span></button>
+    <p class="admin-welcome-foot">KRISTU JAYANTI UNIVERSITY <span>·</span> YOUTH RED CROSS</p>
+  </div>
+</section>
+<script src="{{url_for('static',filename='admin-welcome.js',v='2026.1')}}" defer></script>
+{% endif %}

@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="{{ url_for('static',filename='cinematic.css',v='cinematic-refresh-2026') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='yrc-theme.css',v='yrc-crimson-2026-count-ui') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='futuristic.css',v='2026.2') }}">
+  {% if request.endpoint=='dashboard' %}<link rel="stylesheet" href="{{url_for('static',filename='admin-welcome.css',v='2026.1')}}">{% endif %}
   {% if request.endpoint == 'volunteer_home' %}<link rel="stylesheet" href="{{ url_for('static',filename='volunteer.css',v='2026.32') }}">{% elif request.endpoint == 'convenor_management' %}<link rel="stylesheet" href="{{ url_for('static',filename='convenor-admin.css',v='2026.11') }}">{% endif %}
 </head>
 <body class="{{ 'volunteer-interface' if request.endpoint == 'volunteer_home' else '' }}">
@@ -34,40 +35,27 @@
       <a class="{{ 'active' if request.endpoint=='dashboard' }}" href="/">
         <span>&#9638;</span>Dashboard
       </a>
-      <a class="{{ 'active' if request.endpoint in ['students','student_detail'] }}" href="/students">
-        <span>&#9823;</span>Students
-      </a>
-      <a class="{{ 'active' if request.endpoint=='volunteer_page' }}" href="/volunteer" target="_blank" rel="noopener">
-        <span>&#9823;</span>Volunteer page
-      </a>
-      <a class="{{ 'active' if request.endpoint in ['events','event_detail'] }}" href="/events">
-        <span>&#9635;</span>Events
-      </a>
-      <a class="{{ 'active' if request.endpoint=='academic_calendar' }}" href="/academic-calendar">
-        <span>&#9634;</span>Batch
-      </a>
-      <a class="{{ 'active' if request.endpoint=='attendance_page' }}" href="/attendance">
-        <span>&#10003;</span>Attendance
-      </a>
-      <a class="{{ 'active' if request.endpoint in ['fair_selection','recommend'] }}" href="/selection">
-        <span>&#10038;</span>Fair selection
-      </a>
-      <a class="{{ 'active' if request.endpoint in ['semester_list','semester_detail'] }}" href="/semesters">
-        <span>&#9733;</span>Semester eligibility
-      </a>
-      <a class="{{ 'active' if request.endpoint=='reports' }}" href="/reports">
-        <span>&#9634;</span>Reports
-      </a>
-      <a class="{{ 'active' if request.endpoint=='settings' }}" href="/settings">
-        <span>&#9881;</span>Settings
-      </a>
+      <a class="{{ 'active' if request.endpoint in ['students','student_detail'] }}" href="/students"><span>&#9823;</span>Students</a>
+      <a class="{{ 'active' if request.endpoint=='cohort_management' }}" href="/cohorts"><span>&#9634;</span>Batch</a>
+      <a class="{{ 'active' if request.endpoint in ['events','event_detail'] }}" href="/events"><span>&#9635;</span>Events</a>
+      <a class="{{ 'active' if request.endpoint=='attendance_page' }}" href="/attendance"><span>&#10003;</span>Attendance</a>
+      <a class="{{ 'active' if request.endpoint in ['semester_list','semester_detail'] }}" href="/semesters"><span>&#9733;</span>Semester eligibility</a>
+      {% if session.get('admin_role')=='super_admin' %}
+      <a class="{{ 'active' if request.endpoint=='department_management' }}" href="/departments"><span>&#9638;</span>Departments</a>
+      <a href="/volunteer" target="_blank" rel="noopener"><span>&#9823;</span>Volunteer page</a>
+      <a class="{{ 'active' if request.endpoint in ['fair_selection','recommend'] }}" href="/selection"><span>&#10038;</span>Fair selection</a>
+      <a class="{{ 'active' if request.endpoint=='reports' }}" href="/reports"><span>&#9634;</span>Reports</a>
+      <a class="{{ 'active' if request.endpoint=='settings' }}" href="/settings"><span>&#9881;</span>Settings</a>
+      <a class="{{ 'active' if request.endpoint=='admin_management' }}" href="/admins"><span>&#9822;</span>Admin Management</a>
+      <a class="{{ 'active' if request.endpoint=='audit_logs' }}" href="/audit-logs"><span>&#9776;</span>Audit Logs</a>
+      {% endif %}
     </nav>
     <div class="sidebar-bottom">
       <div class="admin-card">
-        <div class="avatar">{{ session.get('username','A')[0]|upper }}</div>
+        <div class="avatar">{{ session.get('admin_display_name',session.get('username','A'))[0]|upper }}</div>
         <span>
-          <b>{{ session.get('username','Admin') }}</b>
-          <small>YRC Administrator</small>
+          <b>{{ session.get('admin_display_name',session.get('username','Admin')) }}</b>
+          <small>{{ 'SUPER ADMIN' if session.get('admin_role')=='super_admin' else 'DEPARTMENT ADMIN' }}</small>
         </span>
         <form method="post" action="/logout">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -118,27 +106,32 @@
     <a class="{{ 'active' if request.endpoint in ['students','student_detail'] }}" href="/students">
       <span>&#9823;</span><small>Volunteers</small>
     </a>
+    <a class="{{ 'active' if request.endpoint=='cohort_management' }}" href="/cohorts">
+      <span>&#9634;</span><small>Batch</small>
+    </a>
+    {% if session.get('admin_role')=='super_admin' %}
     <a class="{{ 'active' if request.endpoint=='volunteer_page' }}" href="/volunteer" aria-label="Volunteer page">
       <span>&#9823;</span><small>Join YRC</small>
     </a>
+    {% endif %}
     <a class="{{ 'active' if request.endpoint in ['events','event_detail'] }}" href="/events">
       <span>&#9635;</span><small>Events</small>
     </a>
     <a class="{{ 'active' if request.endpoint=='attendance_page' }}" href="/attendance">
       <span>&#10003;</span><small>Attendance</small>
     </a>
-    <a class="{{ 'active' if request.endpoint=='fair_selection' }}" href="/selection">
+    {% if session.get('admin_role')=='super_admin' %}<a class="{{ 'active' if request.endpoint=='fair_selection' }}" href="/selection">
       <span>&#10038;</span><small>Fairness</small>
-    </a>
+    </a>{% endif %}
     <a class="{{ 'active' if request.endpoint in ['semester_list','semester_detail'] }}" href="/semesters">
       <span>&#9733;</span><small>Semesters</small>
     </a>
-    <a class="{{ 'active' if request.endpoint=='reports' }}" href="/reports">
+    {% if session.get('admin_role')=='super_admin' %}<a class="{{ 'active' if request.endpoint=='reports' }}" href="/reports">
       <span>&#9634;</span><small>Reports</small>
     </a>
     <a class="{{ 'active' if request.endpoint=='settings' }}" href="/settings">
       <span>&#9881;</span><small>Settings</small>
-    </a>
+    </a>{% endif %}
   </nav>{% endif %}
 
   {% if request.endpoint not in ['volunteer_page','volunteer_home'] %}<script src="{{ url_for('static',filename='futuristic-3d.js',v='2026.2') }}"></script>{% endif %}
@@ -153,3 +146,4 @@
   {% block scripts %}{% endblock %}
 </body>
 </html>
+

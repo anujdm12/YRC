@@ -10,8 +10,9 @@
     <p class="subhead">Manage member telemetry, search batches, and verify participation history.</p>
   </div>
   <div class="heading-actions">
-    <a class="btn secondary small" href="{{ url_for('convenor_management') }}">Manage Student Convenors</a>
-    <a class="btn secondary small" href="{{ url_for('student_credentials_bulk') }}">Issue all portal passwords</a>
+    {% if session.get('admin_role')=='super_admin' %}<a class="btn secondary small" href="{{ url_for('convenor_management') }}">Manage Student Convenors</a>{% endif %}
+    <a class="btn secondary small" href="{{ url_for('cohort_management') }}">Manage Batch</a>
+    {% if session.get('admin_role')=='super_admin' %}<a class="btn secondary small" href="{{ url_for('student_credentials_bulk') }}">Issue all portal passwords</a>{% endif %}
     <form method="post" action="/students/import" enctype="multipart/form-data">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <label class="btn secondary small" title="Import students from CSV">
@@ -34,6 +35,16 @@
       {% for c in cohorts %}
       <option value="{{c}}" {{'selected' if cohort==c}}>{{c|display_batch}}</option>
       {% endfor %}
+    </select>
+    <select name="cohort_verification" aria-label="Cohort verification filter">
+      <option value="">All cohort verification states</option>
+      <option value="pending" {{'selected' if cohort_verification=='pending'}}>Pending verification</option>
+      <option value="automatic" {{'selected' if cohort_verification=='automatic'}}>Automatically assigned</option>
+      <option value="manual" {{'selected' if cohort_verification=='manual'}}>Manually confirmed</option>
+    </select>
+    <select name="year" aria-label="Academic year filter">
+      <option value="">All academic years</option>
+      {% for y in range(1,9) %}<option value="{{y}}" {{'selected' if year_filter|string==y|string}}>Year {{y}}</option>{% endfor %}
     </select>
     <select name="department" aria-label="Department filter">
       <option value="">All departments</option>
@@ -60,10 +71,10 @@
 
   <div class="panel-head table-header">
     <div>
-      <h2>Student directory <span class="count-pill">{{students|length}} active</span></h2>
+      <h2>Student directory <span class="count-pill">{{students|length}} students</span></h2>
       <p>Records matching active filters</p>
     </div>
-    <a class="btn secondary small" href="/reports/students.csv">&#8595; Export CSV</a>
+    {% if session.get('admin_role')=='super_admin' %}<a class="btn secondary small" href="/reports/students.csv">&#8595; Export CSV</a>{% endif %}
   </div>
 
   <div class="table-scroll">
@@ -92,7 +103,7 @@
             </a>
           </td>
           <td><span style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted)">{{s.register_no}}</span></td>
-          <td>{{s.cohort|display_batch}}</td>
+          <td>{{s.cohort|display_batch}}{% if s.cohort_verification=='pending' %}<small class="cell-sub" style="display:block;color:var(--brand)">Pending verification</small>{% elif s.cohort_verification=='automatic' %}<small class="cell-sub" style="display:block">Prefix matched</small>{% endif %}</td>
           <td>{{s.department}}</td>
           <td>{{s.class_name}}</td>
           <td>{{s.section or '—'}}</td>
@@ -136,8 +147,8 @@
       <button type="button" class="modal-close" onclick="this.closest('dialog').close()">&times;</button>
     </div>
     <div class="form-grid">
-      <label>Batch / intake
-        <input name="cohort" placeholder="Leave blank to use the configured register-number mapping">
+      <label>Batch / intake <small>Leave blank to use a configured register prefix</small>
+        <input name="cohort" placeholder="e.g. 2027 Cohort">
       </label>
       <label>Register number
         <input name="register_no" required placeholder="e.g. 24BCAR001">

@@ -12,12 +12,9 @@
   <link rel="stylesheet" href="{{ url_for('static',filename='cinematic.css',v='cinematic-refresh-2026') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='yrc-theme.css',v='yrc-crimson-2026-count-ui') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='futuristic.css',v='2026.2') }}">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static',filename='volunteer.css',v='2026.21') }}">
 </head>
 <body class="login-page student-login-page">
-  <div id="holoProgressBar" class="holo-progress-bar" aria-hidden="true"></div>
-  <canvas id="loginCanvas"></canvas>
-
   <section class="login-art">
     <div class="login-brand">
       <img class="brand-logo" src="{{ url_for('static',filename='yrc-logo.jpg') }}" alt="Youth Red Cross KJU logo">
@@ -57,7 +54,6 @@
     </form>
   </main>
 
-  <script src="{{ url_for('static',filename='futuristic-3d.js',v='2026.2') }}"></script>
   <script>
     (function(){
       const input=document.getElementById("studentPassword");

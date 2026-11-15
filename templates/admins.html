@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}Admin Management{% endblock %}
+{% block crumb %}ADMIN MANAGEMENT{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">SYSTEM CONTROL // ACCESS DIRECTORY</div><h1>Admin Management</h1><p class="subhead">Manage Super Admin and department scoped administrator accounts.</p></div><span class="badge active">SUPER ADMIN ONLY</span></div>
+<section class="panel"><div class="panel-head"><div><h2>Create administrator</h2><p>Passwords are stored as secure hashes. Department Admins require one active department assignment. CA and Computational Studies admins share access to both departments.</p></div></div>
+<form class="form-grid" method="post" action="{{url_for('admin_create')}}">
+  <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+  <label>Admin name<input name="display_name" maxlength="120" required></label>
+  <label>Username / Login ID<input name="username" minlength="3" maxlength="40" pattern="[A-Za-z0-9._-]{3,40}" required autocomplete="off"></label>
+  <label>Email<input name="email" type="email" maxlength="160"></label>
+  <label>Initial password<input name="password" type="password" minlength="8" maxlength="128" required autocomplete="new-password"></label>
+  <label>Role<select name="role" required><option value="department_admin">Department Admin</option><option value="super_admin">Super Admin</option></select></label>
+  <label>Department assignment<select name="department_id"><option value="">Not applicable</option>{% for d in departments %}<option value="{{d.id}}">{{d.name}}</option>{% endfor %}</select></label>
+  <label>Account status<select name="status"><option value="active">Active</option><option value="suspended">Suspended</option><option value="revoked">Revoked</option></select></label>
+  <div class="modal-actions" style="grid-column:1/-1"><button class="btn primary" type="submit">Create admin</button></div>
+</form></section>
+<section class="panel"><div class="panel-head"><div><h2>Administrator accounts</h2><p>Changing an account or assignment revokes its existing admin sessions.</p></div><span class="count-pill">{{admins|length}} ACCOUNTS</span></div>
+<div class="table-scroll"><table><thead><tr><th>ADMIN</th><th>ROLE</th><th>DEPARTMENT</th><th>STATUS</th><th>LAST LOGIN</th><th>LAST ACTIVITY</th><th>EDIT</th></tr></thead><tbody>
+{% for a in admins %}<tr>
+  <td><b>{{a.display_name or a.username}}</b><div class="cell-sub">{{a.username}}{% if a.email %} · {{a.email}}{% endif %}</div></td>
+  <td><span class="badge {{'active' if a.role=='super_admin' else 'inactive'}}">{{'SUPER ADMIN' if a.role=='super_admin' else 'DEPARTMENT ADMIN'}}</span></td>
+  <td>{{a.department_name or 'All departments'}}</td>
+  <td><span class="badge {{'active' if a.status=='active' else 'inactive'}}">{{a.status|title}}</span></td>
+  <td>{{a.last_login or 'Never'}}</td><td>{{a.last_action or 'No recorded activity'}}{% if a.last_action_at %}<div class="cell-sub">{{a.last_action_at}}</div>{% endif %}<details><summary class="mini-btn">Activity history</summary><div class="admin-activity-list">{% for item in activity_by_admin.get(a.id,[]) %}<p><b>{{item.action}}</b><small>{{item.created_at}} · {{item.entity_type}}{% if item.entity_id %} #{{item.entity_id}}{% endif %}</small></p>{% else %}<p>No activity is recorded for this account.</p>{% endfor %}</div></details></td>
+  <td><details><summary class="mini-btn">Edit account</summary><form class="form-grid" method="post" action="{{url_for('admin_update',admin_id=a.id)}}">
+    <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
+    <label>Username / Login ID<input name="username" value="{{a.username}}" minlength="3" maxlength="40" pattern="[A-Za-z0-9._-]{3,40}" required autocomplete="off"></label>
+    <label>Admin name<input name="display_name" value="{{a.display_name}}" maxlength="120" required></label>
+    <label>Email<input name="email" type="email" value="{{a.email}}" maxlength="160"></label>
+    <label>Role<select name="role"><option value="super_admin" {{'selected' if a.role=='super_admin'}}>Super Admin</option><option value="department_admin" {{'selected' if a.role=='department_admin'}}>Department Admin</option></select></label>
+    <label>Department<select name="department_id"><option value="">Not applicable</option>{% for d in departments %}<option value="{{d.id}}" {{'selected' if a.department_id==d.id}}>{{d.name}}</option>{% endfor %}</select></label>
+    <label>Status<select name="status">{% for status in ['active','suspended','revoked'] %}<option value="{{status}}" {{'selected' if a.status==status}}>{{status|title}}</option>{% endfor %}</select></label>
+    <label>Reset password<input name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="Leave blank to keep current"></label>
+    <button class="btn secondary small" type="submit">Save changes</button>
+  </form></details></td>
+</tr>{% else %}<tr><td colspan="7" class="empty-cell">No administrator accounts found.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

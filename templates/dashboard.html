@@ -158,7 +158,7 @@
   (function() {
     const ctx = document.getElementById('participationChart');
     if (!ctx) return;
-
+    
     // Create subtle vertical gradient
     const chartCtx = ctx.getContext('2d');
     const gradCrimson = chartCtx.createLinearGradient(0, 0, 0, 220);
@@ -223,4 +223,5 @@
     });
   })();
 </script>
+{% include 'admin_welcome.html' %}
 {% endblock %}

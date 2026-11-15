@@ -1285,9 +1285,22 @@ def student_convenor_photo(filename):
         if not admin or admin['status']!='active' or not token or not secrets.compare_digest(admin['session_token'],token):
             session.clear(); return '',401
         if admin['role']!='super_admin': return 'Photo not found',404
-    photo=db().execute('SELECT photo_data,active FROM student_convenors WHERE photo=?',('uploads/convenors/'+filename,)).fetchone()
+    photo=db().execute('SELECT photo_data,active,department_id FROM student_convenors WHERE photo=?',('uploads/convenors/'+filename,)).fetchone()
     if photo and photo['photo_data'] is not None:
-        if not session.get('admin_id'): return 'Photo not found',404
+        if not photo['active']:
+            return 'Photo not found',404
+        if not session.get('admin_id'):
+            student_id=session.get('student_id')
+            if not student_id: return '',401
+            account=db().execute('''SELECT a.session_token,s.yrc_status,s.department_id,s.department_verification
+                FROM student_accounts a JOIN students s ON s.id=a.student_id WHERE a.student_id=?''',(student_id,)).fetchone()
+            token=session.get('student_session_token','')
+            if not account or account['yrc_status']!='Active' or not token or not secrets.compare_digest(account['session_token'],token):
+                return '',401
+            if account['department_verification']!='verified' or not account['department_id']:
+                return 'Photo not found',404
+            if photo['department_id'] not in shared_department_ids(account['department_id']):
+                return 'Photo not found',404
         response=Response(bytes(photo['photo_data']),mimetype='image/jpeg')
         response.headers['Cache-Control']='private, max-age=3600'
         return response
@@ -1304,7 +1317,8 @@ def student_convenor_photo(filename):
         if not account or account['yrc_status']!='Active' or not token or not secrets.compare_digest(account['session_token'],token):
             return '',401
         today=date.today().isoformat()
-        if (account['department_verification']!='verified' or account['department_id']!=photo['department_id'] or
+        if (account['department_verification']!='verified' or not account['department_id'] or
+            photo['department_id'] not in shared_department_ids(account['department_id']) or
             photo['status']!='active' or (photo['active_from'] and photo['active_from']>today) or
             (photo['active_until'] and photo['active_until']<today)):
             return 'Photo not found',404

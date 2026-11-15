@@ -366,6 +366,23 @@ def volunteer_change_password():
         db().commit(); flash('Your password has been changed.','success')
     return redirect(url_for('volunteer_home'))
 
+@app.post('/volunteer/update-profile')
+@student_required
+def volunteer_update_profile():
+    email=request.form.get('email','').strip()
+    phone=request.form.get('phone','').strip()
+    valid_email=not email or (len(email)<=254 and re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email))
+    valid_phone=not phone or (len(phone)<=30 and re.fullmatch(r'\+?[0-9().\- ]{7,30}',phone) and sum(character.isdigit() for character in phone)>=7)
+    if not valid_email:
+        flash('Enter a valid college email address.','error')
+    elif not valid_phone:
+        flash('Enter a valid phone number.','error')
+    else:
+        db().execute('UPDATE students SET email=?,phone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(email or None,phone or None,session['student_id']))
+        db().commit()
+        flash('Your profile contact details have been updated.','success')
+    return redirect(url_for('volunteer_home',_anchor='profile-settings'))
+
 @app.post('/logout')
 def logout(): session.clear(); return redirect(url_for('login'))
 

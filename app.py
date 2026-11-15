@@ -986,6 +986,18 @@ def academic_calendar():
                 conn.execute('UPDATE cohorts SET admission_year=?,academic_year_start=? WHERE id=?',(year,year_start,cohort_id))
                 audit('Cohort calendar metadata updated','cohort',cohort_id,{'admission_year':cohort['admission_year'],'academic_year_start':cohort['academic_year_start']},{'admission_year':year,'academic_year_start':year_start})
                 conn.commit(); flash('Cohort calendar metadata saved.','success')
+        elif action=='remove_period':
+            try: period_id=int(request.form.get('period_id',''))
+            except (TypeError,ValueError): period_id=0
+            period=conn.execute('''SELECT p.id,p.name,p.semester,c.name cohort_name FROM academic_periods p
+                JOIN cohorts c ON c.id=p.cohort_id WHERE p.id=? AND p.status='active' ''',(period_id,)).fetchone()
+            if not period:
+                flash('Choose an active academic period. No records were changed.','error')
+            else:
+                conn.execute("UPDATE academic_periods SET status='inactive' WHERE id=?",(period_id,))
+                audit('Academic period removed from active calendar','academic_period',period_id,
+                    f"{period['cohort_name']}; {period['name']} (Semester {period['semester']})",'inactive')
+                conn.commit(); flash('Academic period removed from the active calendar. Existing attendance history was preserved.','success')
         elif action=='mapping':
             prefix=request.form.get('prefix','').strip().upper()
             try: cohort_id=int(request.form.get('cohort_id',''))

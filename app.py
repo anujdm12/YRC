@@ -949,7 +949,17 @@ def academic_calendar():
     conn=db()
     if request.method=='POST':
         action=request.form.get('action','')
-        if action=='cohort':
+        if action=='confirm_all_2026':
+            batch=conn.execute("SELECT id,name FROM cohorts WHERE LOWER(TRIM(name))='2026 batch' AND status='active'").fetchone()
+            if not batch:
+                flash('The active 2026 batch could not be found. No volunteer records were changed.','error')
+            else:
+                result=conn.execute("UPDATE students SET cohort=?,cohort_id=?,cohort_verification='manual',updated_at=CURRENT_TIMESTAMP WHERE cohort_verification='pending' OR cohort_id IS NULL",(batch['name'],batch['id']))
+                if result.rowcount:
+                    audit('All pending students assigned to 2026 batch','cohort',batch['id'],'',f'{result.rowcount} students')
+                conn.commit()
+                flash(f'{result.rowcount} volunteers confirmed as 2026 batch.','success')
+        elif action=='cohort':
             name=' '.join(request.form.get('name','').split()).strip()
             try: year=int(request.form.get('admission_year',''))
             except (TypeError,ValueError): year=0

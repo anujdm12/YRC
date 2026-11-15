@@ -132,7 +132,7 @@ def init_db():
     if 'leadership_role' not in leadership_columns:
         conn.execute("ALTER TABLE department_leadership_appointments ADD COLUMN leadership_role TEXT NOT NULL DEFAULT 'department_leader'")
         if 'position' in leadership_columns:
-            conn.execute("UPDATE department_leadership_appointments SET leadership_role=CASE WHEN LOWER(position) LIKE '%secretar%' THEN 'department_secretary' ELSE 'department_leader' END")
+            conn.execute("UPDATE department_leadership_appointments SET leadership_role=CASE WHEN LOWER(position) LIKE ? THEN 'department_secretary' ELSE 'department_leader' END",('%secretar%',))
     for semester_number in range(1, 5):
         conn.execute('INSERT OR IGNORE INTO semesters(id,name) VALUES(?,?)', (semester_number, f'Semester {semester_number}'))
     conn.execute("INSERT OR IGNORE INTO semester_rules(semester_id,rule_type,value,mandatory,verification_required) VALUES(1,'minimum_activities','2',1,0)")
@@ -159,7 +159,7 @@ def init_db():
         SELECT d.id FROM departments d
         WHERE LOWER(TRIM(d.name))=TRIM(REPLACE(LOWER(TRIM(student_convenors.role)),'department of ',''))
           AND d.status='active' LIMIT 1)
-        WHERE department_id IS NULL AND LOWER(TRIM(role)) LIKE 'department of %'
+        WHERE department_id IS NULL AND SUBSTR(LOWER(TRIM(role)),1,14)='department of '
           AND EXISTS(SELECT 1 FROM departments d
             WHERE LOWER(TRIM(d.name))=TRIM(REPLACE(LOWER(TRIM(student_convenors.role)),'department of ',''))
               AND d.status='active')''')
@@ -543,22 +543,24 @@ def volunteer_home():
         leadership_status='department_pending'
     else:
         contact_department_ids=shared_department_ids(student['department_id'])
-        student_convenors=conn.execute('''SELECT c.id,c.name,
-                CASE WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%secretar%'
-                       OR LOWER(COALESCE(c.role,'')) LIKE '%secretar%'
-                     THEN 'department_secretary'
-                     WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%leader%'
-                       OR LOWER(COALESCE(c.role,'')) LIKE '%leader%'
-                     THEN 'department_leader' ELSE 'department_convenor' END AS role,
-                c.coordinator_title,c.phone,c.email,c.photo,d.name AS department_name
+        contacts=conn.execute('''SELECT c.id,c.name,c.role AS legacy_role,c.coordinator_title,
+                c.phone,c.email,c.photo,c.sort_order,d.name AS department_name
             FROM student_convenors c JOIN departments d ON d.id=c.department_id
             WHERE c.department_id IN ('''+','.join('?' for _ in contact_department_ids)+''') AND c.active=1 AND d.status='active'
-            ORDER BY CASE WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%secretar%'
-                                OR LOWER(COALESCE(c.role,'')) LIKE '%secretar%'
-                          THEN 1 WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%leader%'
-                                OR LOWER(COALESCE(c.role,'')) LIKE '%leader%'
-                          THEN 0 ELSE 2 END,c.sort_order,c.id''',
+            ORDER BY c.sort_order,c.id''',
             tuple(contact_department_ids)).fetchall()
+        student_convenors=[]
+        for contact in contacts:
+            person=dict(contact)
+            title=(person.get('coordinator_title') or '').casefold()
+            legacy_role=(person.get('legacy_role') or '').casefold()
+            person['role']=('department_secretary' if 'secretar' in title or 'secretar' in legacy_role else
+                            'department_leader' if 'leader' in title or 'leader' in legacy_role else
+                            'department_convenor')
+            student_convenors.append(person)
+        student_convenors.sort(key=lambda person:(
+            0 if person['role']=='department_leader' else 1 if person['role']=='department_secretary' else 2,
+            person['sort_order'],person['id']))
         has_leader=any(person['role']=='department_leader' for person in student_convenors)
         has_secretary=any(person['role']=='department_secretary' for person in student_convenors)
         leadership_status='leader_vacancy' if not has_leader else ('secretary_vacancy' if not has_secretary else 'ready')

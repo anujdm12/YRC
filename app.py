@@ -305,17 +305,19 @@ def admin_department_id(admin_id=None):
         (admin_id or session.get('admin_id'),)).fetchall()
     return row[0]['department_id'] if len(row)==1 else None
 
-def admin_department_scope_ids(admin_id=None):
-    """Department data scope; CA and CS admins share both department scopes."""
-    primary=admin_department_id(admin_id)
-    if not primary:
-        return []
+def shared_department_ids(primary):
+    """Return CA+CS as a shared scope; other departments remain independent."""
+    if not primary:return []
     row=db().execute('SELECT code,name FROM departments WHERE id=? AND status=\'active\'',(primary,)).fetchone()
     if row and (row['code']=='CA' or row['name'] in ('Computer Applications','Computational Studies')):
         pair=db().execute("SELECT id FROM departments WHERE status='active' AND (code='CA' OR name IN ('Computer Applications','Computational Studies')) ORDER BY id").fetchall()
         if len(pair)==2:
             return [item['id'] for item in pair]
     return [primary]
+
+def admin_department_scope_ids(admin_id=None):
+    """Department data scope; CA and CS admins share both department scopes."""
+    return shared_department_ids(admin_department_id(admin_id))
 
 def department_scope_sql(column='department_id'):
     ids=getattr(g,'admin_department_ids',None)
@@ -540,6 +542,7 @@ def volunteer_home():
         student_convenors=[]
         leadership_status='department_pending'
     else:
+        contact_department_ids=shared_department_ids(student['department_id'])
         student_convenors=conn.execute('''SELECT c.id,c.name,
                 CASE WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%secretar%'
                        OR LOWER(COALESCE(c.role,'')) LIKE '%secretar%'
@@ -549,13 +552,13 @@ def volunteer_home():
                      THEN 'department_leader' ELSE 'department_convenor' END AS role,
                 c.coordinator_title,c.phone,c.email,c.photo,d.name AS department_name
             FROM student_convenors c JOIN departments d ON d.id=c.department_id
-            WHERE c.department_id=? AND c.active=1 AND d.status='active'
+            WHERE c.department_id IN ('''+','.join('?' for _ in contact_department_ids)+''') AND c.active=1 AND d.status='active'
             ORDER BY CASE WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%secretar%'
                                 OR LOWER(COALESCE(c.role,'')) LIKE '%secretar%'
                           THEN 1 WHEN LOWER(COALESCE(c.coordinator_title,'')) LIKE '%leader%'
                                 OR LOWER(COALESCE(c.role,'')) LIKE '%leader%'
                           THEN 0 ELSE 2 END,c.sort_order,c.id''',
-            (student['department_id'],)).fetchall()
+            tuple(contact_department_ids)).fetchall()
         has_leader=any(person['role']=='department_leader' for person in student_convenors)
         has_secretary=any(person['role']=='department_secretary' for person in student_convenors)
         leadership_status='leader_vacancy' if not has_leader else ('secretary_vacancy' if not has_secretary else 'ready')

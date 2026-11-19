@@ -2358,7 +2358,7 @@ def semester_eligibility_many(semester_id, student_ids):
     placeholders=','.join('?' for _ in ids)
     activity_rows=conn.execute("SELECT a.student_id,COUNT(DISTINCT a.event_id) AS activities FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.status='Present' AND e.status<>'Cancelled' AND e.counts_for_eligibility=1 AND e.semester=? AND a.student_id IN ("+placeholders+") GROUP BY a.student_id",[semester_id,*ids]).fetchall() if semester else []
     activities={r['student_id']:r['activities'] for r in activity_rows}
-    certificate_rows=conn.execute("SELECT student_id,COUNT(DISTINCT LOWER(TRIM(certificate_type))) AS certificates FROM semester_certificates WHERE semester_id=? AND status='Verified' AND student_id IN ("+placeholders+") GROUP BY student_id",[semester_id,*ids]).fetchall() if semester_id==1 and semester else []
+    certificate_rows=conn.execute("SELECT student_id,COUNT(DISTINCT LOWER(TRIM(certificate_type))) AS certificates FROM semester_certificates WHERE semester_id=? AND LOWER(TRIM(status)) NOT IN ('rejected','declined') AND student_id IN ("+placeholders+") GROUP BY student_id",[semester_id,*ids]).fetchall() if semester_id==1 and semester else []
     certificates={r['student_id']:r['certificates'] for r in certificate_rows}
     results={}; history=[]
     for student_id in ids:
@@ -2384,7 +2384,7 @@ def semester_eligibility_many(semester_id, student_ids):
     return results
 
 def semester_one_marks(activities, certificates):
-    """Return Semester 1 marks from distinct completed activities and verified certificates."""
+    """Return Semester 1 marks from distinct completed activities and certificate records."""
     activities=max(0,int(activities or 0)); certificates=max(0,int(certificates or 0))
     if activities>=5 or (activities>=3 and certificates>=1): return 25
     if activities==2 and certificates>=2: return 20

@@ -68,8 +68,8 @@ class SemesterEligibilityTests(unittest.TestCase):
         self.attendance(2)
         with portal.app.app_context():
             conn=portal.db()
-            conn.execute("INSERT INTO semester_certificates(semester_id,student_id,certificate_type,status) VALUES(1,?,'Event Certificate','Verified')",(self.student_id,))
-            conn.execute("INSERT INTO semester_certificates(semester_id,student_id,certificate_type,status) VALUES(1,?,'Course Certificate','Verified')",(self.student_id,))
+            conn.execute("INSERT INTO semester_certificates(semester_id,student_id,certificate_type,status) VALUES(1,?,'Event Certificate','Submitted')",(self.student_id,))
+            conn.execute("INSERT INTO semester_certificates(semester_id,student_id,certificate_type,status) VALUES(1,?,'Course Certificate','Submitted')",(self.student_id,))
             conn.commit()
             result=portal.semester_eligibility(1,self.student_id)
             self.assertEqual(2,result['certificates'])

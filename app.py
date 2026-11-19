@@ -2462,14 +2462,21 @@ def semester_report_csv(semester_id):
     semester=db().execute('SELECT name FROM semesters WHERE id=?',(semester_id,)).fetchone()
     if not semester: return 'Semester not found',404
     output=io.StringIO(); writer=csv.writer(output)
-    writer.writerow(['Semester','Register number','Student','Department','Class','Activities completed','Activities required','Status','Remaining requirements'] + (['Certificate courses','Semester 1 marks'] if semester_id==1 else []))
     students=db().execute("SELECT id,register_no,name,department,class_name FROM students WHERE yrc_status='Active' AND department_id IN ("+','.join('?' for _ in g.admin_department_ids)+") ORDER BY name",tuple(g.admin_department_ids)).fetchall() if g.admin['role']=='department_admin' else db().execute("SELECT id,register_no,name,department,class_name FROM students WHERE yrc_status='Active' ORDER BY name").fetchall()
+    writer.writerow(['Semester','Register number','Student','Department','Class','Activities completed','Activities required','Status','Remaining requirements','Events participated in','Total events participated'] + (['Certificate courses','Semester 1 marks'] if semester_id==1 else []))
     results=semester_eligibility_many(semester_id,[student['id'] for student in students])
+    student_ids=[student['id'] for student in students]
+    event_rows=db().execute("SELECT a.student_id,e.id event_id,e.name,e.event_date FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.status='Present' AND e.status<>'Cancelled' AND e.semester=? AND a.student_id IN ("+','.join('?' for _ in student_ids)+") ORDER BY e.event_date,e.id",[semester_id,*student_ids]).fetchall() if student_ids else []
+    events_by_student={}
+    for event in event_rows:
+        attended=events_by_student.setdefault(event['student_id'],{})
+        attended.setdefault(event['event_id'],event['name'])
     for student in students:
         result=results[student['id']]
         is_eligible=result['status']=='ELIGIBLE'
         if (section=='eligible') != is_eligible: continue
-        values=[semester['name'],student['register_no'],student['name'],student['department'],student['class_name'],result['activities'],result['minimum'],result['status'],'; '.join(result['reasons'])]
+        event_names=list(events_by_student.get(student['id'],{}).values())
+        values=[semester['name'],student['register_no'],student['name'],student['department'],student['class_name'],result['activities'],result['minimum'],result['status'],'; '.join(result['reasons']),'; '.join(event_names),len(event_names)]
         if semester_id==1: values.extend([result['certificates'],result['marks']])
         writer.writerow(values)
     db().commit()

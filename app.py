@@ -2358,9 +2358,12 @@ def semester_eligibility_many(semester_id, student_ids):
     placeholders=','.join('?' for _ in ids)
     activity_rows=conn.execute("SELECT a.student_id,COUNT(DISTINCT a.event_id) AS activities FROM attendance a JOIN events e ON e.id=a.event_id WHERE a.status='Present' AND e.status<>'Cancelled' AND e.counts_for_eligibility=1 AND e.semester=? AND a.student_id IN ("+placeholders+") GROUP BY a.student_id",[semester_id,*ids]).fetchall() if semester else []
     activities={r['student_id']:r['activities'] for r in activity_rows}
+    certificate_rows=conn.execute("SELECT student_id,COUNT(DISTINCT LOWER(TRIM(certificate_type))) AS certificates FROM semester_certificates WHERE semester_id=? AND status='Verified' AND student_id IN ("+placeholders+") GROUP BY student_id",[semester_id,*ids]).fetchall() if semester_id==1 and semester else []
+    certificates={r['student_id']:r['certificates'] for r in certificate_rows}
     results={}; history=[]
     for student_id in ids:
         count=activities.get(student_id,0)
+        certificate_count=certificates.get(student_id,0) if semester_id==1 else 0
         if not semester or not rules:
             result={'status':'INCOMPLETE_RECORDS','activities':count,'minimum':minimum,'reasons':['Eligibility criteria have not been configured.' if semester else 'Semester configuration is missing.']}
         else:
@@ -2372,10 +2375,23 @@ def semester_eligibility_many(semester_id, student_ids):
                 reasons=['You have met the activity requirement.']
             status='ELIGIBLE' if count>=minimum else 'NOT_ELIGIBLE'
             result={'status':status,'activities':count,'minimum':minimum,'reasons':reasons}
+        if semester_id==1:
+            result['certificates']=certificate_count
+            result['marks']=semester_one_marks(count,certificate_count)
         results[student_id]=result
         history.append((semester_id,student_id,result['status'],'; '.join(result['reasons'])))
     conn.executemany('INSERT INTO semester_eligibility_history(semester_id,student_id,status,reasons) VALUES(?,?,?,?) ON CONFLICT(semester_id,student_id) DO UPDATE SET status=excluded.status,reasons=excluded.reasons,calculated_at=CURRENT_TIMESTAMP',history)
     return results
+
+def semester_one_marks(activities, certificates):
+    """Return Semester 1 marks from distinct completed activities and verified certificates."""
+    activities=max(0,int(activities or 0)); certificates=max(0,int(certificates or 0))
+    if activities>=5 or (activities>=3 and certificates>=1): return 25
+    if activities==2 and certificates>=2: return 20
+    if activities==2 and certificates==1: return 15
+    if activities==2: return 10
+    if activities==1 and certificates>=1: return 10
+    return 0
 
 def semester_eligibility(semester_id, student_id):
     """Calculate one student's result through the shared batch calculation service."""
@@ -2446,14 +2462,16 @@ def semester_report_csv(semester_id):
     semester=db().execute('SELECT name FROM semesters WHERE id=?',(semester_id,)).fetchone()
     if not semester: return 'Semester not found',404
     output=io.StringIO(); writer=csv.writer(output)
-    writer.writerow(['Semester','Register number','Student','Department','Class','Activities completed','Activities required','Status','Remaining requirements'])
+    writer.writerow(['Semester','Register number','Student','Department','Class','Activities completed','Activities required','Status','Remaining requirements'] + (['Certificate courses','Semester 1 marks'] if semester_id==1 else []))
     students=db().execute("SELECT id,register_no,name,department,class_name FROM students WHERE yrc_status='Active' AND department_id IN ("+','.join('?' for _ in g.admin_department_ids)+") ORDER BY name",tuple(g.admin_department_ids)).fetchall() if g.admin['role']=='department_admin' else db().execute("SELECT id,register_no,name,department,class_name FROM students WHERE yrc_status='Active' ORDER BY name").fetchall()
     results=semester_eligibility_many(semester_id,[student['id'] for student in students])
     for student in students:
         result=results[student['id']]
         is_eligible=result['status']=='ELIGIBLE'
         if (section=='eligible') != is_eligible: continue
-        writer.writerow([semester['name'],student['register_no'],student['name'],student['department'],student['class_name'],result['activities'],result['minimum'],result['status'],'; '.join(result['reasons'])])
+        values=[semester['name'],student['register_no'],student['name'],student['department'],student['class_name'],result['activities'],result['minimum'],result['status'],'; '.join(result['reasons'])]
+        if semester_id==1: values.extend([result['certificates'],result['marks']])
+        writer.writerow(values)
     db().commit()
     return Response('\ufeff'+output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename="semester-{semester_id}-{section}.csv"'})
 

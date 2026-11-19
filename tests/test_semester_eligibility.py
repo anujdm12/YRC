@@ -55,6 +55,26 @@ class SemesterEligibilityTests(unittest.TestCase):
         with portal.app.app_context():
             return portal.semester_eligibility(semester,self.student_id)
 
+    def test_semester_one_marks_criteria_and_priority(self):
+        cases=[(5,0,25),(7,0,25),(3,1,25),(3,2,25),(2,2,20),(2,3,20),
+               (2,1,15),(2,0,10),(1,1,10),(1,2,10),(1,0,0),(0,5,0)]
+        for activities,certificates,expected in cases:
+            with self.subTest(activities=activities,certificates=certificates):
+                marks=portal.semester_one_marks(activities,certificates)
+                self.assertEqual(expected,marks)
+                self.assertLessEqual(marks,25)
+
+    def test_event_certificates_count_as_certificate_courses(self):
+        self.attendance(2)
+        with portal.app.app_context():
+            conn=portal.db()
+            conn.execute("INSERT INTO semester_certificates(semester_id,student_id,certificate_type,status) VALUES(1,?,'Event Certificate','Verified')",(self.student_id,))
+            conn.execute("INSERT INTO semester_certificates(semester_id,student_id,certificate_type,status) VALUES(1,?,'Course Certificate','Verified')",(self.student_id,))
+            conn.commit()
+            result=portal.semester_eligibility(1,self.student_id)
+            self.assertEqual(2,result['certificates'])
+            self.assertEqual(20,result['marks'])
+
     def test_two_activities_and_verified_icrc_is_eligible(self):
         self.attendance(2); self.certificate('Verified')
         self.assertEqual('ELIGIBLE',self.calculate()['status'])

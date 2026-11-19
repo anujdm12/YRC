@@ -114,6 +114,7 @@
           <th>STUDENT</th>
           <th>DEPARTMENT</th>
           <th>ACTIVITIES</th>
+          {% if semester.id == 1 %}<th>SEM 1 MARKS</th>{% endif %}
           <th>STATUS</th>
         </tr>
       </thead>
@@ -124,11 +125,12 @@
           <td class="table-title">{{ row.student.name }}</td>
           <td>{{ row.student.department }}</td>
           <td><b style="font-family:var(--font-mono);color:var(--emerald-core)">{{ row.result.activities }} / {{ row.result.minimum }}</b></td>
+          {% if semester.id == 1 %}<td><b style="font-family:var(--font-mono);color:var(--emerald-core)">{{ row.result.marks }} / 25</b><small class="cell-sub">{{ row.result.certificates }} certificates</small></td>{% endif %}
           <td><span class="badge present">ELIGIBLE</span></td>
         </tr>
         {% else %}
         <tr>
-          <td colspan="5" class="empty-cell">No students have achieved full eligibility for this term yet.</td>
+          <td colspan="{{ 6 if semester.id == 1 else 5 }}" class="empty-cell">No students have achieved full eligibility for this term yet.</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -155,6 +157,7 @@
           <th>STUDENT</th>
           <th>DEPARTMENT</th>
           <th>ACTIVITIES</th>
+          {% if semester.id == 1 %}<th>SEM 1 MARKS</th>{% endif %}
           <th>STATUS &amp; REMAINING CRITERIA</th>
         </tr>
       </thead>
@@ -165,6 +168,7 @@
           <td class="table-title">{{ row.student.name }}</td>
           <td>{{ row.student.department }}</td>
           <td><b style="font-family:var(--font-mono)">{{ row.result.activities }} / {{ row.result.minimum }}</b></td>
+          {% if semester.id == 1 %}<td><b style="font-family:var(--font-mono)">{{ row.result.marks }} / 25</b><small class="cell-sub">{{ row.result.certificates }} certificates</small></td>{% endif %}
           <td>
             <span class="badge absent">NOT ELIGIBLE</span>
             {% if row.result.reasons %}
@@ -174,7 +178,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="5" class="empty-cell">No students in this section.</td>
+          <td colspan="{{ 6 if semester.id == 1 else 5 }}" class="empty-cell">No students in this section.</td>
         </tr>
         {% endfor %}
       </tbody>

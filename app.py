@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS semester_certificates(id INTEGER PRIMARY KEY, semeste
 CREATE TABLE IF NOT EXISTS semester_eligibility_history(id INTEGER PRIMARY KEY, semester_id INTEGER NOT NULL REFERENCES semesters(id), student_id INTEGER NOT NULL REFERENCES students(id), status TEXT NOT NULL, reasons TEXT NOT NULL DEFAULT '', calculated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(semester_id,student_id));
 CREATE TABLE IF NOT EXISTS student_convenors(id INTEGER PRIMARY KEY, sort_order INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'STUDENT LEAD', department_id INTEGER REFERENCES departments(id), phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '', photo_data BYTEA, active INTEGER NOT NULL DEFAULT 1, coordinator_title TEXT NOT NULL DEFAULT 'Student Coordinator', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS department_leadership_appointments(id INTEGER PRIMARY KEY, department_id INTEGER NOT NULL REFERENCES departments(id), leadership_role TEXT NOT NULL, name TEXT NOT NULL, designation TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '', photo_data BYTEA, status TEXT NOT NULL DEFAULT 'active', active_from TEXT NOT NULL DEFAULT '', active_until TEXT, appointed_by INTEGER REFERENCES admins(id), updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, CHECK(leadership_role IN ('department_leader','department_secretary')), CHECK(status IN ('active','retired')));
+CREATE TABLE IF NOT EXISTS department_student_leaders(id INTEGER PRIMARY KEY, department_id INTEGER NOT NULL REFERENCES departments(id), student_id INTEGER NOT NULL REFERENCES students(id), designation TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, appointed_by INTEGER REFERENCES admins(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(department_id,student_id));
+CREATE TABLE IF NOT EXISTS department_membership_exclusions(student_id INTEGER NOT NULL REFERENCES students(id), department_id INTEGER NOT NULL REFERENCES departments(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(student_id,department_id));
 '''
 
 def db():
@@ -152,7 +154,7 @@ def init_db():
             department_id=cur.lastrowid
         else:
             department_id=existing['id']
-        conn.execute('UPDATE students SET department_id=? WHERE department_id IS NULL AND TRIM(department)=?',(department_id,name))
+        conn.execute('UPDATE students SET department_id=? WHERE department_id IS NULL AND TRIM(department)=? AND NOT EXISTS (SELECT 1 FROM department_membership_exclusions x WHERE x.student_id=students.id AND x.department_id=?)',(department_id,name,department_id))
     # Carry forward only legacy contacts whose old role explicitly names a
     # registered department; generic role labels remain unassigned for review.
     conn.execute('''UPDATE student_convenors SET department_id=(
@@ -778,10 +780,102 @@ def department_management():
             conn.rollback(); flash('That department name or code is already in use.','error')
         return redirect(url_for('department_management'))
     departments=conn.execute('''SELECT d.*, a.username leader_name,
-        (SELECT COUNT(*) FROM students s WHERE s.department_id=d.id) volunteer_count,
+        (SELECT COUNT(*) FROM students s WHERE s.department_id=d.id AND s.department_verification='verified') volunteer_count,
+        (SELECT COUNT(*) FROM department_student_leaders l WHERE l.department_id=d.id AND l.active=1) student_leader_count,
         (SELECT COUNT(*) FROM admin_department_assignments x WHERE x.department_id=d.id) admin_count
         FROM departments d LEFT JOIN admins a ON a.id=d.leader_admin_id ORDER BY d.name''').fetchall()
     return render_template('departments.html',departments=departments)
+
+@app.get('/departments/<int:department_id>')
+@central_admin_required
+def department_detail(department_id):
+    conn=db(); department=conn.execute('SELECT * FROM departments WHERE id=?',(department_id,)).fetchone()
+    if not department: return 'Department not found.',404
+    q=request.args.get('q','').strip(); semester=request.args.get('semester','').strip(); class_name=request.args.get('class_name','').strip()
+    where=["s.department_id=?", "s.department_verification='verified'"]; args=[department_id]
+    if q:
+        where.append('(s.name LIKE ? OR s.register_no LIKE ? OR CAST(s.id AS TEXT) LIKE ?)'); args.extend([f'%{q}%']*3)
+    if semester.isdigit(): where.append("COALESCE((SELECT MAX(h.semester_id) FROM semester_eligibility_history h WHERE h.student_id=s.id),s.year)=?"); args.append(int(semester))
+    if class_name: where.append('s.class_name=?'); args.append(class_name)
+    predicate=' AND '.join(where)
+    students=conn.execute(f'''SELECT s.*,COALESCE((SELECT MAX(h.semester_id) FROM semester_eligibility_history h WHERE h.student_id=s.id),s.year) semester
+        FROM students s WHERE {predicate} ORDER BY s.name''',tuple(args)).fetchall()
+    semesters=conn.execute('''SELECT semester,COUNT(*) total FROM (SELECT s.id,COALESCE((SELECT MAX(h.semester_id) FROM semester_eligibility_history h WHERE h.student_id=s.id),s.year) semester FROM students s WHERE s.department_id=? AND s.department_verification='verified') x GROUP BY semester ORDER BY semester''',(department_id,)).fetchall()
+    classes=conn.execute("SELECT DISTINCT class_name FROM students WHERE department_id=? AND department_verification='verified' AND class_name<>'' ORDER BY class_name",(department_id,)).fetchall()
+    leaders=conn.execute('''SELECT l.*,s.name,s.register_no,s.class_name,s.year,s.phone,s.email FROM department_student_leaders l JOIN students s ON s.id=l.student_id WHERE l.department_id=? AND l.active=1 ORDER BY l.created_at,l.id''',(department_id,)).fetchall()
+    convenor_leaders=conn.execute('''SELECT id,name,coordinator_title designation,phone,email,photo FROM student_convenors WHERE department_id=? AND active=1 ORDER BY sort_order,id''',(department_id,)).fetchall()
+    candidates=conn.execute("SELECT id,name,register_no,class_name,year FROM students WHERE department_id=? AND department_verification='verified' AND id NOT IN (SELECT student_id FROM department_student_leaders WHERE department_id=? AND active=1) ORDER BY name",(department_id,department_id)).fetchall()
+    available_students=conn.execute("SELECT id,name,register_no,class_name,year FROM students WHERE department_id IS NULL ORDER BY name").fetchall()
+    total=conn.execute("SELECT COUNT(*) FROM students WHERE department_id=? AND department_verification='verified'",(department_id,)).fetchone()[0]
+    return render_template('department_detail.html',department=department,students=students,semesters=semesters,classes=classes,leaders=leaders,convenor_leaders=convenor_leaders,candidates=candidates,available_students=available_students,total=total,q=q,semester=semester,class_name=class_name)
+
+@app.post('/departments/<int:department_id>/students/add')
+@central_admin_required
+def department_students_add(department_id):
+    conn=db(); dep=conn.execute("SELECT id,name FROM departments WHERE id=? AND status='active'",(department_id,)).fetchone()
+    if not dep:return 'Department not found.',404
+    ids=[]
+    for value in request.form.getlist('student_ids'):
+        if value.isdigit() and int(value) not in ids: ids.append(int(value))
+    if not ids: flash('Select at least one existing student.','error'); return redirect(url_for('department_detail',department_id=department_id))
+    changed=0
+    for sid in ids:
+        student=conn.execute("SELECT id,department FROM students WHERE id=? AND (department_id IS NULL OR department_verification<>'verified')",(sid,)).fetchone()
+        if not student: continue
+        conn.execute("UPDATE students SET department_id=?,department=?,department_verification='verified',updated_at=CURRENT_TIMESTAMP WHERE id=?",(department_id,dep['name'],sid))
+        conn.execute('DELETE FROM department_membership_exclusions WHERE student_id=? AND department_id=?',(sid,department_id))
+        conn.execute('INSERT INTO department_transfers(student_id,from_department_id,to_department_id,approved_by,performed_by,reason) VALUES(?,NULL,?,?,?,?)',(sid,department_id,session['admin_id'],session['admin_id'],'Department directory addition'))
+        audit('Student added to department','department_student',department_id,'',f'{sid}: {student["department"]} -> {dep["name"]}'); changed+=1
+    conn.commit(); flash(f'{changed} student(s) added. Existing records were retained.','success'); return redirect(url_for('department_detail',department_id=department_id))
+
+@app.post('/departments/<int:department_id>/students/<int:sid>/remove')
+@central_admin_required
+def department_student_remove(department_id,sid):
+    conn=db(); student=conn.execute("SELECT name,register_no FROM students WHERE id=? AND department_id=? AND department_verification='verified'",(sid,department_id)).fetchone()
+    if not student:return 'Student not found in this department.',404
+    conn.execute("UPDATE students SET department_id=NULL,department_verification='pending',updated_at=CURRENT_TIMESTAMP WHERE id=?",(sid,))
+    conn.execute('INSERT INTO department_membership_exclusions(student_id,department_id) VALUES(?,?) ON CONFLICT(student_id,department_id) DO NOTHING',(sid,department_id))
+    conn.execute('INSERT INTO department_transfers(student_id,from_department_id,to_department_id,approved_by,performed_by,reason) VALUES(?,?,?, ?,?,?)',(sid,department_id,department_id,session['admin_id'],session['admin_id'],'Removed from department roster'))
+    audit('Student removed from department','department_student',department_id,f'{student["name"]} ({student["register_no"]})','Roster membership removed; student record retained')
+    conn.commit(); flash('Student removed from this department roster; their record was retained.','success'); return redirect(url_for('department_detail',department_id=department_id))
+
+@app.post('/departments/<int:department_id>/students/remove-bulk')
+@central_admin_required
+def department_students_remove_bulk(department_id):
+    conn=db(); ids=[]
+    for value in request.form.getlist('student_ids'):
+        if value.isdigit() and int(value) not in ids: ids.append(int(value))
+    if not ids: flash('Select at least one student to remove.','error'); return redirect(url_for('department_detail',department_id=department_id))
+    removed=0
+    for sid in ids:
+        student=conn.execute("SELECT name,register_no FROM students WHERE id=? AND department_id=? AND department_verification='verified'",(sid,department_id)).fetchone()
+        if not student: continue
+        conn.execute("UPDATE students SET department_id=NULL,department_verification='pending',updated_at=CURRENT_TIMESTAMP WHERE id=?",(sid,))
+        conn.execute('INSERT INTO department_membership_exclusions(student_id,department_id) VALUES(?,?) ON CONFLICT(student_id,department_id) DO NOTHING',(sid,department_id))
+        conn.execute('INSERT INTO department_transfers(student_id,from_department_id,to_department_id,approved_by,performed_by,reason) VALUES(?,?,?,?,?,?)',(sid,department_id,department_id,session['admin_id'],session['admin_id'],'Bulk removal from department roster'))
+        audit('Student removed from department','department_student',department_id,f'{student["name"]} ({student["register_no"]})','Bulk roster removal; student record retained'); removed+=1
+    conn.commit(); flash(f'{removed} student(s) removed from the roster; records retained.','success'); return redirect(url_for('department_detail',department_id=department_id))
+
+@app.post('/departments/<int:department_id>/leaders/appoint')
+@central_admin_required
+def department_leader_appoint(department_id):
+    conn=db(); dep=conn.execute("SELECT id FROM departments WHERE id=? AND status='active'",(department_id,)).fetchone()
+    sid=request.form.get('student_id',''); designation=' '.join(request.form.get('designation','').split()).strip()
+    student=conn.execute("SELECT id,name FROM students WHERE id=? AND department_id=? AND department_verification='verified'",(int(sid),department_id)).fetchone() if sid.isdigit() else None
+    if not dep or not student or not designation or len(designation)>80:
+        flash('Choose a department student and enter a designation (up to 80 characters).','error'); return redirect(url_for('department_detail',department_id=department_id))
+    conn.execute('INSERT INTO department_student_leaders(department_id,student_id,designation,appointed_by) VALUES(?,?,?,?) ON CONFLICT(department_id,student_id) DO UPDATE SET designation=excluded.designation,active=1,appointed_by=excluded.appointed_by,updated_at=CURRENT_TIMESTAMP',(department_id,student['id'],designation,session['admin_id']))
+    audit('Department leader appointed or changed','department_leader',department_id,'',f'{student["name"]}: {designation}')
+    conn.commit(); flash(f'{student["name"]} appointed as {designation}.','success'); return redirect(url_for('department_detail',department_id=department_id))
+
+@app.post('/departments/<int:department_id>/leaders/<int:leader_id>/remove')
+@central_admin_required
+def department_leader_remove(department_id,leader_id):
+    conn=db(); leader=conn.execute('SELECT s.name,l.designation FROM department_student_leaders l JOIN students s ON s.id=l.student_id WHERE l.id=? AND l.department_id=? AND l.active=1',(leader_id,department_id)).fetchone()
+    if not leader:return 'Leader not found.',404
+    conn.execute('UPDATE department_student_leaders SET active=0,updated_at=CURRENT_TIMESTAMP WHERE id=?',(leader_id,))
+    audit('Department leadership ended','department_leader',department_id,f'{leader["name"]}: {leader["designation"]}','Leadership position removed')
+    conn.commit(); flash('Leadership position removed; student remains in the department.','success'); return redirect(url_for('department_detail',department_id=department_id))
 
 @app.post('/departments/<int:department_id>/update')
 @central_admin_required
@@ -2386,11 +2480,16 @@ def semester_eligibility_many(semester_id, student_ids):
 def semester_one_marks(activities, certificates):
     """Return Semester 1 marks from distinct completed activities and certificate records."""
     activities=max(0,int(activities or 0)); certificates=max(0,int(certificates or 0))
-    if activities>=5 or (activities>=3 and certificates>=1): return 25
-    if activities==2 and certificates>=2: return 20
-    if activities==2 and certificates==1: return 15
-    if activities==2: return 10
-    if activities==1 and certificates>=1: return 10
+    if activities>=5 or (activities>=3 and certificates>=1):
+        return 25
+    if activities==2 and certificates>=2:
+        return 20
+    if activities==2 and certificates==1:
+        return 15
+    if activities==2:
+        return 10
+    if activities==1 and certificates>=1:
+        return 10
     return 0
 
 def semester_eligibility(semester_id, student_id):

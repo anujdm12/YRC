@@ -17,7 +17,7 @@
 </form></section>
 <section class="panel"><div class="panel-head"><div><h2>Department directory</h2><p>Existing student department labels were imported into this registry during the additive startup migration.</p></div></div>
 <div class="table-scroll"><table><thead><tr><th>DEPARTMENT</th><th>VOLUNTEERS</th><th>LEADERSHIP</th><th>ADMINS</th><th>STATUS</th><th>DEPARTMENT DETAILS</th></tr></thead><tbody>
-{% for d in departments %}<tr><td><b>{{d.name}}</b><div class="cell-sub">{{d.code}}</div></td><td>{{d.volunteer_count}}</td><td>Manage appointments</td><td>{{d.admin_count}}</td><td><span class="badge {{'active' if d.status=='active' else 'inactive'}}">{{d.status|title}}</span></td><td>
+{% for d in departments %}<tr><td><a class="table-title" href="{{url_for('department_detail',department_id=d.id)}}"><b>{{d.name}}</b></a><div class="cell-sub">{{d.code}}</div></td><td><a class="text-link" href="{{url_for('department_detail',department_id=d.id)}}">{{d.volunteer_count}} students</a></td><td><a class="text-link" href="{{url_for('department_detail',department_id=d.id)}}">{{d.student_leader_count}} student leaders · Manage</a></td><td>{{d.admin_count}}</td><td><span class="badge {{'active' if d.status=='active' else 'inactive'}}">{{d.status|title}}</span></td><td>
 <form method="post" action="{{url_for('department_update',department_id=d.id)}}" class="form-grid">
   <input type="hidden" name="_csrf_token" value="{{csrf_token}}">
   <input name="name" required maxlength="120" value="{{d.name}}" aria-label="Department name">

@@ -33,7 +33,7 @@
     <label>Status<select name="status">{% for status in ['active','suspended','revoked'] %}<option value="{{status}}" {{'selected' if a.status==status}}>{{status|title}}</option>{% endfor %}</select></label>
     <label>Reset password<input name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="Leave blank to keep current"></label>
     <button class="btn secondary small" type="submit">Save changes</button>
-  </form></details>{% if a.id != session.get('admin_id') and a.status!='revoked' %}<form method="post" action="{{url_for('admin_remove',admin_id=a.id)}}" style="margin-top:8px" onsubmit="return confirm('Remove admin access for {{a.display_name or a.username}}? The account and audit history will be retained.')"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><button class="btn danger small" type="submit">Remove admin</button></form>{% endif %}</td>
+  </form></details>{% if a.id != session.get('admin_id') %}<form method="post" action="{{url_for('admin_remove',admin_id=a.id)}}" style="margin-top:8px" onsubmit="return confirm('Permanently delete {{a.display_name or a.username}} and their audit history? Related operational records will be retained.')"><input type="hidden" name="_csrf_token" value="{{csrf_token}}"><button class="btn danger small" type="submit">Remove admin</button></form>{% endif %}</td>
 </tr>{% else %}<tr><td colspan="7" class="empty-cell">No administrator accounts found.</td></tr>{% endfor %}
 </tbody></table></div></section>
 {% endblock %}

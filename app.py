@@ -733,9 +733,15 @@ def admin_remove(admin_id):
         if active_super<=1:
             flash('The last active Super Admin cannot be removed. Create another Super Admin first.','error')
             return redirect(url_for('admin_management'))
-    conn.execute("UPDATE admins SET status='revoked',session_token=? WHERE id=?",(secrets.token_urlsafe(32),admin_id))
-    audit('Admin account removed','admin',admin_id,f'{current["username"]}; {current["status"]}','revoked; account and audit history retained')
-    conn.commit(); flash(f'{current["display_name"] or current["username"]} no longer has admin access. Account history was retained.','success')
+    # Preserve operational records while removing the account's attribution links.
+    for table,column in (('departments','leader_admin_id'),('department_transfers','approved_by'),
+                         ('department_transfers','performed_by'),('event_departments','assigned_by'),
+                         ('department_leadership_appointments','appointed_by'),('department_student_leaders','appointed_by')):
+        conn.execute(f'UPDATE {table} SET {column}=NULL WHERE {column}=?',(admin_id,))
+    conn.execute('DELETE FROM admin_audit_logs WHERE admin_id=?',(admin_id,))
+    conn.execute('DELETE FROM admins WHERE id=?',(admin_id,))
+    audit('Admin account deleted','admin',admin_id,f'{current["username"]}; {current["status"]}','account and associated audit history deleted')
+    conn.commit(); flash(f'{current["display_name"] or current["username"]} and their audit history were deleted. Operational records were retained.','success')
     return redirect(url_for('admin_management'))
 
 @app.get('/')

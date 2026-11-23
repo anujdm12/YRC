@@ -2476,7 +2476,10 @@ def semester_report_csv(semester_id):
         is_eligible=result['status']=='ELIGIBLE'
         if (section=='eligible') != is_eligible: continue
         event_names=list(events_by_student.get(student['id'],{}).values())
-        values=[semester['name'],student['register_no'],student['name'],student['department'],student['class_name'],result['activities'],result['minimum'],result['status'],'; '.join(result['reasons']),'; '.join(event_names),len(event_names)]
+        joined_event_names='; '.join(event_names)
+        if joined_event_names.startswith(('=', '+', '-', '@', '\t', '\r')):
+            joined_event_names="'"+joined_event_names
+        values=[semester['name'],student['register_no'],student['name'],student['department'],student['class_name'],result['activities'],result['minimum'],result['status'],'; '.join(result['reasons']),joined_event_names,len(event_names)]
         if semester_id==1: values.extend([result['certificates'],result['marks']])
         writer.writerow(values)
     db().commit()

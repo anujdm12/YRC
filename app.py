@@ -719,6 +719,25 @@ def admin_update(admin_id):
     conn.commit(); flash('Admin account updated. Its previous sessions have been revoked.','success')
     return redirect(url_for('admin_management'))
 
+@app.post('/admins/<int:admin_id>/remove')
+@central_admin_required
+def admin_remove(admin_id):
+    if admin_id==session.get('admin_id'):
+        flash('You cannot remove your own administrator account.','error')
+        return redirect(url_for('admin_management'))
+    conn=db(); current=conn.execute('''SELECT a.username,a.display_name,a.status,r.role FROM admins a
+        JOIN admin_roles r ON r.admin_id=a.id WHERE a.id=?''',(admin_id,)).fetchone()
+    if not current: return 'Admin account not found.',404
+    if current['role']=='super_admin' and current['status']=='active':
+        active_super=conn.execute("SELECT COUNT(*) FROM admins a JOIN admin_roles r ON r.admin_id=a.id WHERE r.role='super_admin' AND a.status='active'").fetchone()[0]
+        if active_super<=1:
+            flash('The last active Super Admin cannot be removed. Create another Super Admin first.','error')
+            return redirect(url_for('admin_management'))
+    conn.execute("UPDATE admins SET status='revoked',session_token=? WHERE id=?",(secrets.token_urlsafe(32),admin_id))
+    audit('Admin account removed','admin',admin_id,f'{current["username"]}; {current["status"]}','revoked; account and audit history retained')
+    conn.commit(); flash(f'{current["display_name"] or current["username"]} no longer has admin access. Account history was retained.','success')
+    return redirect(url_for('admin_management'))
+
 @app.get('/')
 @login_required
 def dashboard():

@@ -622,16 +622,27 @@ def volunteer_logout(): session.clear(); return redirect(url_for('volunteer_page
 
 def registration_email(to_address, subject, body):
     """Send registration mail only when a real SMTP relay is configured."""
-    host=os.getenv('SMTP_HOST','').strip()
-    if not host:
-        raise RuntimeError('Email notifications are not configured.')
-    message=EmailMessage(); message['Subject']=subject
-    message['From']=os.getenv('SMTP_FROM',os.getenv('SMTP_USER','')); message['To']=to_address
-    message.set_content(body)
-    with smtplib.SMTP(host,int(os.getenv('SMTP_PORT','587')),timeout=15) as smtp:
-        smtp.starttls()
-        if os.getenv('SMTP_USER'): smtp.login(os.getenv('SMTP_USER'),os.getenv('SMTP_PASSWORD',''))
-        smtp.send_message(message)
+    try:
+        host=os.getenv('SMTP_HOST','').strip()
+        sender=os.getenv('SMTP_FROM',os.getenv('SMTP_USER','')).strip()
+        if not host or not sender:
+            app.logger.warning('Registration email is not configured; notice skipped.')
+            return False
+        message=EmailMessage(); message['Subject']=subject
+        message['From']=sender; message['To']=to_address
+        message.set_content(body)
+        with smtplib.SMTP(host,int(os.getenv('SMTP_PORT','587')),timeout=15) as smtp:
+            smtp.starttls()
+            if os.getenv('SMTP_USER'): smtp.login(os.getenv('SMTP_USER'),os.getenv('SMTP_PASSWORD',''))
+            smtp.send_message(message)
+        return True
+    except Exception:
+        app.logger.exception('Could not send a registration email notice.')
+        return False
+
+def notify_registration_decision(application_id, to_address, subject, body):
+    """A mail relay failure must never undo or break a saved decision."""
+    return registration_email(to_address,subject,body)
 
 def registration_open(conn):
     settings=conn.execute('SELECT * FROM volunteer_registration_settings WHERE id=1').fetchone()
@@ -774,9 +785,8 @@ def registration_decision(application_id):
                 conn.execute('UPDATE volunteer_applications SET status=\'APPROVED\',student_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(student_id,application_id))
                 conn.execute('INSERT INTO volunteer_application_history(application_id,actor_admin_id,action,note) VALUES(?,?,\'APPROVED\',?)',(application_id,session['admin_id'],note))
                 conn.commit()
-                try: registration_email(row['email'],'Your KJU YRC volunteer application is approved',f'Congratulations {row["full_name"]}. Your volunteer account is active. Sign in at {url_for("volunteer_page",_external=True)} using your registration number and chosen password.')
-                except (RuntimeError,OSError,smtplib.SMTPException): pass
-                flash('Application approved and volunteer account activated.','success')
+                notice_sent=notify_registration_decision(application_id,row['email'],'Your KJU YRC volunteer application is approved',f'Congratulations {row["full_name"]}. Your volunteer account is active. Sign in at {url_for("volunteer_page",_external=True)} using your registration number and chosen password.')
+                flash('Application approved and volunteer account activated.' if notice_sent else 'Application approved and account activated, but the email notice could not be sent. Check SMTP settings.','success' if notice_sent else 'error')
             except Exception as exc:
                 conn.rollback(); flash(str(exc) if isinstance(exc,ValueError) else 'Could not approve this application.','error')
     elif action=='reject':

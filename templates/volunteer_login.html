@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="{{ url_for('static',filename='portal.css',v='cinematic-refresh-2026') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='layout.css',v='cinematic-refresh-2026') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='cinematic.css',v='cinematic-refresh-2026') }}">
-  <link rel="stylesheet" href="{{ url_for('static',filename='yrc-theme.css',v='yrc-crimson-2026-count-ui') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='yrc-theme.css',v='yrc-crimson-2026-count-ui-visibility1') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='futuristic.css',v='2026.2') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='volunteer.css',v='2026.21') }}">
 </head>
@@ -50,7 +50,7 @@
         </span>
       </label>
       <button class="btn primary full" type="submit">Sign in to my portal <span>&#8594;</span></button>
-      <div class="login-note">Need access? Contact your YRC coordinator. <a href="/login">Staff sign in</a></div>
+      <div class="login-note volunteer-login-links"><span>New to YRC?</span><div class="volunteer-login-actions"><a href="/volunteer/register">Apply to volunteer</a><a href="/volunteer/track">Track application</a></div><a class="staff-login-link" href="/login">Staff sign in</a></div>
     </form>
   </main>
 

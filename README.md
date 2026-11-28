@@ -1,6 +1,10 @@
 ﻿# KJU YRC Admin Management Portal
 
-A Flask admin application for the existing YRC roster, event, attendance, and credit records. It currently uses SQLite so it runs locally without a database server. The current implementation is a starter and does **not** yet meet the full specification for MySQL/SQLAlchemy, department scoped accounts, application intake, migrations, and complete reports.
+A Flask admin application for the existing YRC roster, event, attendance, and credit records. It currently uses SQLite so it runs locally without a database server. The application also includes public volunteer self-registration and a role-scoped approval workflow.
+
+## Volunteer self-registration
+
+Apply at `/volunteer/register` and track an application at `/volunteer/track`. New submissions go directly to **Pending approval**; no email verification is required. The additive migration runs through `init_db()`. Super Admins manage the registration window in **Registration Management**. Department Admins need the existing `can_manage_volunteers` assignment and are scoped to their assigned department. Optional SMTP settings (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`) deliver approval or rejection notices. Set `COOKIE_SECURE=1` when serving the portal over HTTPS.
 
 ## Run locally
 

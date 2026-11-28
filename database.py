@@ -53,7 +53,7 @@ class CursorProxy:
 
 
 class PostgresConnection:
-    _RETURNING_TABLES = {'admins', 'students', 'events', 'student_convenors', 'cohorts', 'departments', 'department_transfers', 'department_leadership_appointments'}
+    _RETURNING_TABLES = {'admins', 'students', 'events', 'student_convenors', 'cohorts', 'departments', 'department_transfers', 'department_leadership_appointments', 'volunteer_applications'}
 
     def __init__(self, connection):
         self._connection = connection

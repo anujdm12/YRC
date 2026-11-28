@@ -62,6 +62,14 @@ CREATE TABLE IF NOT EXISTS student_convenors(id INTEGER PRIMARY KEY, sort_order 
 CREATE TABLE IF NOT EXISTS department_leadership_appointments(id INTEGER PRIMARY KEY, department_id INTEGER NOT NULL REFERENCES departments(id), leadership_role TEXT NOT NULL, name TEXT NOT NULL, designation TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '', photo_data BYTEA, status TEXT NOT NULL DEFAULT 'active', active_from TEXT NOT NULL DEFAULT '', active_until TEXT, appointed_by INTEGER REFERENCES admins(id), updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, CHECK(leadership_role IN ('department_leader','department_secretary')), CHECK(status IN ('active','retired')));
 CREATE TABLE IF NOT EXISTS department_student_leaders(id INTEGER PRIMARY KEY, department_id INTEGER NOT NULL REFERENCES departments(id), student_id INTEGER NOT NULL REFERENCES students(id), designation TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, appointed_by INTEGER REFERENCES admins(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(department_id,student_id));
 CREATE TABLE IF NOT EXISTS department_membership_exclusions(student_id INTEGER NOT NULL REFERENCES students(id), department_id INTEGER NOT NULL REFERENCES departments(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(student_id,department_id));
+CREATE TABLE IF NOT EXISTS volunteer_applications(id INTEGER PRIMARY KEY, full_name TEXT NOT NULL, date_of_birth TEXT NOT NULL, gender TEXT NOT NULL, register_no TEXT NOT NULL, department_id INTEGER NOT NULL REFERENCES departments(id), course TEXT NOT NULL DEFAULT '', semester_id INTEGER NOT NULL REFERENCES semesters(id), batch TEXT NOT NULL, email TEXT NOT NULL, mobile TEXT NOT NULL, password_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING_APPROVAL', verification_token_hash TEXT NOT NULL DEFAULT '', verification_expires_at INTEGER, verified_at TEXT, student_id INTEGER REFERENCES students(id), rejection_reason TEXT NOT NULL DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_volunteer_applications_register ON volunteer_applications(LOWER(register_no)) WHERE status NOT IN ('REJECTED');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_volunteer_applications_email ON volunteer_applications(LOWER(email)) WHERE status NOT IN ('REJECTED');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_volunteer_applications_mobile ON volunteer_applications(mobile) WHERE status NOT IN ('REJECTED');
+CREATE TABLE IF NOT EXISTS volunteer_application_history(id INTEGER PRIMARY KEY, application_id INTEGER NOT NULL REFERENCES volunteer_applications(id) ON DELETE CASCADE, actor_admin_id INTEGER REFERENCES admins(id), action TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS volunteer_registration_settings(id INTEGER PRIMARY KEY CHECK(id=1), is_open INTEGER NOT NULL DEFAULT 1, opens_at TEXT, closes_at TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS volunteer_registration_attempts(id INTEGER PRIMARY KEY, client_key TEXT NOT NULL, attempted_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_volunteer_registration_attempts_time ON volunteer_registration_attempts(client_key,attempted_at);
 '''
 
 def db():
@@ -111,6 +119,8 @@ def process_convenor_photo(upload):
 def init_db():
     conn = connect_db(DB_PATH)
     conn.executescript(SCHEMA)
+    conn.execute('INSERT OR IGNORE INTO volunteer_registration_settings(id,is_open) VALUES(1,1)')
+    conn.execute("UPDATE volunteer_applications SET status='PENDING_APPROVAL',verification_token_hash='',updated_at=CURRENT_TIMESTAMP WHERE status='PENDING_VERIFICATION'")
     admin_columns={row[1] for row in conn.execute('PRAGMA table_info(admins)')}
     for column,definition in (
         ('display_name',"TEXT NOT NULL DEFAULT ''"),('email',"TEXT NOT NULL DEFAULT ''"),
@@ -289,7 +299,10 @@ def csrf_protect():
 @app.context_processor
 def csrf_context():
     if '_csrf_token' not in session: session['_csrf_token']=secrets.token_urlsafe(32)
-    return {'csrf_token':session['_csrf_token']}
+    can_review=session.get('admin_role')=='super_admin'
+    if not can_review and session.get('admin_id'):
+        can_review=bool(db().execute('SELECT 1 FROM admin_department_assignments WHERE admin_id=? AND can_manage_volunteers=1 LIMIT 1',(session['admin_id'],)).fetchone())
+    return {'csrf_token':session['_csrf_token'],'can_review_registrations':can_review}
 
 DEPARTMENT_ADMIN_ENDPOINTS={
     'dashboard','students','student_detail','student_edit','student_status','student_delete','student_remove',
@@ -297,6 +310,7 @@ DEPARTMENT_ADMIN_ENDPOINTS={
     'events','event_detail','event_eligibility_update','event_delete','event_semester_update','recommend','select_student','select_multiple_students','import_event_participants',
     'remove_participant','attendance_page','attendance_event_csv','mark_attendance','mark_all_present',
     'semester_list','semester_detail','semester_report_csv','eligibility','event_permanent_delete',
+    'registration_management','registration_decision','registration_export',
 }
 DEPARTMENT_ADMIN_READ_ONLY_POSTS={'semester_detail'}
 
@@ -605,6 +619,197 @@ def logout(): session.clear(); return redirect(url_for('login'))
 
 @app.post('/volunteer/logout')
 def volunteer_logout(): session.clear(); return redirect(url_for('volunteer_page'))
+
+def registration_email(to_address, subject, body):
+    """Send registration mail only when a real SMTP relay is configured."""
+    host=os.getenv('SMTP_HOST','').strip()
+    if not host:
+        raise RuntimeError('Email notifications are not configured.')
+    message=EmailMessage(); message['Subject']=subject
+    message['From']=os.getenv('SMTP_FROM',os.getenv('SMTP_USER','')); message['To']=to_address
+    message.set_content(body)
+    with smtplib.SMTP(host,int(os.getenv('SMTP_PORT','587')),timeout=15) as smtp:
+        smtp.starttls()
+        if os.getenv('SMTP_USER'): smtp.login(os.getenv('SMTP_USER'),os.getenv('SMTP_PASSWORD',''))
+        smtp.send_message(message)
+
+def registration_open(conn):
+    settings=conn.execute('SELECT * FROM volunteer_registration_settings WHERE id=1').fetchone()
+    now=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    return bool(settings and settings['is_open'] and (not settings['opens_at'] or settings['opens_at']<=now) and (not settings['closes_at'] or settings['closes_at']>=now))
+
+@app.route('/volunteer/register',methods=['GET','POST'])
+def volunteer_register():
+    conn=db()
+    departments=conn.execute("SELECT id,name FROM departments WHERE status='active' ORDER BY name").fetchall()
+    semesters=conn.execute('SELECT id,name FROM semesters WHERE active=1 ORDER BY id').fetchall()
+    courses=conn.execute("SELECT DISTINCT class_name FROM students WHERE TRIM(class_name)<>'' ORDER BY class_name").fetchall()
+    cohorts=conn.execute("SELECT name FROM cohorts WHERE status='active' ORDER BY name").fetchall()
+    if request.method=='POST':
+        client_key=__import__('hashlib').sha256((request.remote_addr or 'unknown').encode()).hexdigest()
+        cutoff=int(time.time())-3600
+        attempts=conn.execute('SELECT COUNT(*) FROM volunteer_registration_attempts WHERE client_key=? AND attempted_at>?',(client_key,cutoff)).fetchone()[0]
+        if attempts>=5: flash('Too many registration attempts. Try again in an hour.','error')
+        elif not registration_open(conn): flash('Volunteer registration is currently closed.','error')
+        else:
+            conn.execute('INSERT INTO volunteer_registration_attempts(client_key,attempted_at) VALUES(?,?)',(client_key,int(time.time())))
+            conn.commit()
+            f=request.form
+            name=' '.join(f.get('full_name','').split()); reg=f.get('register_no','').strip().upper()
+            email=f.get('email','').strip().lower(); mobile=f.get('mobile','').strip()
+            normalized_mobile=re.sub(r'[^0-9+]','',mobile)
+            department_id=f.get('department_id',''); semester_id=f.get('semester_id','')
+            password=f.get('password',''); confirm=f.get('confirm_password','')
+            errors=[]
+            if len(name)<2 or len(name)>120: errors.append('Enter your full name.')
+            try: date.fromisoformat(f.get('date_of_birth',''))
+            except ValueError: errors.append('Enter a valid date of birth.')
+            if not re.fullmatch(r'[A-Za-z0-9/-]{4,30}',reg): errors.append('Enter a valid university registration number.')
+            if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email) or len(email)>254: errors.append('Enter a valid university email.')
+            if not re.fullmatch(r'\+?[0-9().\- ]{7,30}',mobile) or sum(c.isdigit() for c in mobile)<7: errors.append('Enter a valid mobile number.')
+            if len(f.get('course','').strip())<2: errors.append('Enter your course or programme.')
+            if len(f.get('batch','').strip())<2: errors.append('Enter your batch or cohort.')
+            if len(password)<8: errors.append('Choose a password with at least 8 characters.')
+            if password!=confirm: errors.append('Passwords do not match.')
+            if f.get('terms')!='accepted': errors.append('Accept the terms to continue.')
+            dept=conn.execute("SELECT id,name FROM departments WHERE id=? AND status='active'",(department_id,)).fetchone() if department_id.isdigit() else None
+            semester=conn.execute('SELECT id,name FROM semesters WHERE id=? AND active=1',(semester_id,)).fetchone() if semester_id.isdigit() else None
+            if not dept: errors.append('Choose an active department.')
+            if not semester: errors.append('Choose an active semester.')
+            if conn.execute('SELECT 1 FROM volunteer_applications WHERE LOWER(register_no)=LOWER(?) AND status NOT IN (\'REJECTED\')',(reg,)).fetchone(): errors.append('An application already exists for this registration number.')
+            roster_student=conn.execute('SELECT id,email,phone,department_id FROM students WHERE LOWER(register_no)=LOWER(?)',(reg,)).fetchone()
+            if conn.execute('SELECT 1 FROM volunteer_applications WHERE LOWER(email)=LOWER(?) AND status NOT IN (\'REJECTED\')',(email,)).fetchone() or conn.execute('SELECT 1 FROM students WHERE LOWER(email)=LOWER(?) AND LOWER(register_no)<>LOWER(?)',(email,reg)).fetchone(): errors.append('This email address is already in use.')
+            if conn.execute('SELECT 1 FROM volunteer_applications WHERE mobile=? AND status NOT IN (\'REJECTED\')',(normalized_mobile,)).fetchone() or conn.execute('SELECT 1 FROM students WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone,\' \',\'\'),\'-\',\'\'),\'(\',\'\'),\')\',\'\'),\'.\',\'\')=? AND LOWER(register_no)<>LOWER(?)',(normalized_mobile,reg)).fetchone(): errors.append('This mobile number is already in use.')
+            if roster_student and roster_student['department_id'] and department_id.isdigit() and roster_student['department_id']!=int(department_id): errors.append('The selected department does not match your university record. Contact the YRC office to correct it.')
+            if roster_student and conn.execute('SELECT 1 FROM student_accounts WHERE student_id=?',(roster_student['id'],)).fetchone(): errors.append('An active volunteer account already exists for this registration number.')
+            if errors:
+                for err in errors: flash(err,'error')
+            else:
+                try:
+                    cur=conn.execute('''INSERT INTO volunteer_applications(full_name,date_of_birth,gender,register_no,department_id,course,semester_id,batch,email,mobile,password_hash,status)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,'PENDING_APPROVAL')''',(name,f['date_of_birth'],f.get('gender','Prefer not to say'),reg,dept['id'],f.get('course','').strip()[:120],semester['id'],f.get('batch','').strip()[:80],email,normalized_mobile,generate_password_hash(password)))
+                    aid=cur.lastrowid
+                    conn.execute("INSERT INTO volunteer_application_history(application_id,action,note) VALUES(?,'SUBMITTED','Application received')",(aid,))
+                    conn.execute("INSERT INTO volunteer_application_history(application_id,action,note) VALUES(?,'PENDING_APPROVAL','Application submitted for YRC review')",(aid,))
+                    conn.commit(); flash('Application submitted. It is now awaiting YRC approval.','success')
+                    return redirect(url_for('volunteer_track'))
+                except Exception as exc:
+                    conn.rollback()
+                    if isinstance(exc,DB_INTEGRITY_ERROR): flash('An application using these details already exists.','error')
+                    else: flash('We could not save your application. Please try again.','error')
+    return render_template('volunteer_register.html',departments=departments,semesters=semesters,courses=courses,cohorts=cohorts,is_open=registration_open(conn))
+
+@app.route('/volunteer/track',methods=['GET','POST'])
+def volunteer_track():
+    application=None
+    if request.method=='POST':
+        reg=request.form.get('register_no','').strip().upper(); email=request.form.get('email','').strip().lower()
+        application=db().execute('''SELECT a.status,a.rejection_reason,a.created_at,d.name department_name
+            FROM volunteer_applications a JOIN departments d ON d.id=a.department_id
+            WHERE LOWER(a.register_no)=LOWER(?) AND LOWER(a.email)=LOWER(?)''',(reg,email)).fetchone()
+        if not application: flash('No application matches those details.','error')
+    return render_template('volunteer_track.html',application=application)
+
+def registration_manager_required(fn):
+    @wraps(fn)
+    @login_required
+    def wrapped(*args,**kwargs):
+        if g.admin['role']=='super_admin': return fn(*args,**kwargs)
+        allowed=db().execute('SELECT 1 FROM admin_department_assignments WHERE admin_id=? AND can_manage_volunteers=1 AND department_id IN ('+','.join('?' for _ in g.admin_department_ids)+')',(session['admin_id'],*g.admin_department_ids)).fetchone() if g.admin_department_ids else None
+        if not allowed: return 'Volunteer application review permission required.',403
+        return fn(*args,**kwargs)
+    return wrapped
+
+@app.get('/registrations')
+@registration_manager_required
+def registration_management():
+    status=request.args.get('status',''); department=request.args.get('department',''); semester=request.args.get('semester',''); query=request.args.get('q','').strip()
+    where=[]; args=[]
+    if g.admin['role']=='department_admin': where.append('a.department_id IN ('+','.join('?' for _ in g.admin_department_ids)+')'); args.extend(g.admin_department_ids)
+    if status in ('PENDING_APPROVAL','APPROVED','REJECTED','SUSPENDED'): where.append('a.status=?'); args.append(status)
+    if department.isdigit(): where.append('a.department_id=?'); args.append(int(department))
+    if semester.isdigit(): where.append('a.semester_id=?'); args.append(int(semester))
+    if query: where.append('(a.full_name LIKE ? OR a.register_no LIKE ? OR a.email LIKE ?)'); args.extend([f'%{query}%']*3)
+    clause=' WHERE '+' AND '.join(where) if where else ''
+    applications=db().execute('''SELECT a.*,d.name department_name,s.name semester_name FROM volunteer_applications a JOIN departments d ON d.id=a.department_id JOIN semesters s ON s.id=a.semester_id'''+clause+' ORDER BY a.created_at DESC,a.id DESC',args).fetchall()
+    history_rows=db().execute('''SELECT h.application_id,h.action,h.note,h.created_at,a.username FROM volunteer_application_history h LEFT JOIN admins a ON a.id=h.actor_admin_id
+        JOIN volunteer_applications v ON v.id=h.application_id'''+(' WHERE v.department_id IN ('+','.join('?' for _ in g.admin_department_ids)+')' if g.admin['role']=='department_admin' else '')+' ORDER BY h.id DESC',g.admin_department_ids if g.admin['role']=='department_admin' else ()).fetchall()
+    histories={}
+    for item in history_rows: histories.setdefault(item['application_id'],[]).append(item)
+    stats_where=' WHERE department_id IN ('+','.join('?' for _ in g.admin_department_ids)+')' if g.admin['role']=='department_admin' else ''
+    stats=db().execute('SELECT status,COUNT(*) n FROM volunteer_applications'+stats_where+' GROUP BY status',g.admin_department_ids if stats_where else ()).fetchall()
+    department_stats=db().execute('SELECT d.name,COUNT(a.id) total,SUM(CASE WHEN a.status=\'PENDING_APPROVAL\' THEN 1 ELSE 0 END) pending FROM departments d LEFT JOIN volunteer_applications a ON a.department_id=d.id'+(' WHERE d.id IN ('+','.join('?' for _ in g.admin_department_ids)+')' if g.admin['role']=='department_admin' else '')+' GROUP BY d.id,d.name ORDER BY d.name',g.admin_department_ids if g.admin['role']=='department_admin' else ()).fetchall()
+    visible_depts=db().execute('SELECT id,name FROM departments WHERE id IN ('+','.join('?' for _ in g.admin_department_ids)+') ORDER BY name',g.admin_department_ids).fetchall() if g.admin['role']=='department_admin' else db().execute('SELECT id,name FROM departments ORDER BY name').fetchall()
+    sems=db().execute('SELECT id,name FROM semesters ORDER BY id').fetchall()
+    setting=db().execute('SELECT * FROM volunteer_registration_settings WHERE id=1').fetchone()
+    return render_template('registration_management.html',applications=applications,histories=histories,stats={r['status']:r['n'] for r in stats},department_stats=department_stats,departments=visible_depts,semesters=sems,setting=setting)
+
+@app.post('/registrations/<int:application_id>/decision')
+@registration_manager_required
+def registration_decision(application_id):
+    conn=db(); row=conn.execute('SELECT * FROM volunteer_applications WHERE id=?',(application_id,)).fetchone()
+    if not row: return 'Application not found.',404
+    if g.admin['role']=='department_admin' and row['department_id'] not in g.admin_department_ids: return 'Application not found.',404
+    action=request.form.get('action'); note=request.form.get('reason','').strip()[:500]
+    if action=='approve':
+        if row['status']!='PENDING_APPROVAL': flash('Only verified applications awaiting review can be approved.','error')
+        else:
+            if not USING_POSTGRES: conn.execute('BEGIN IMMEDIATE')
+            try:
+                student=conn.execute('SELECT * FROM students WHERE LOWER(register_no)=LOWER(?)',(row['register_no'],)).fetchone()
+                cohort=conn.execute('SELECT id FROM cohorts WHERE name=?',(row['batch'],)).fetchone()
+                if not cohort:
+                    cohort_id=conn.execute("INSERT INTO cohorts(name,status) VALUES(?,'active')",(row['batch'],)).lastrowid
+                else: cohort_id=cohort['id']
+                department_name=conn.execute('SELECT name FROM departments WHERE id=?',(row['department_id'],)).fetchone()['name']
+                if student:
+                    if student['department_id'] and student['department_id']!=row['department_id']: raise ValueError('The roster department differs from this application. Resolve the student record before approval.')
+                    if conn.execute('SELECT 1 FROM student_accounts WHERE student_id=?',(student['id'],)).fetchone(): raise ValueError('A volunteer account already exists for this student.')
+                    student_id=student['id']
+                    conn.execute('''UPDATE students SET name=?,department=?,department_id=?,department_verification='verified',class_name=?,year=?,email=?,phone=?,yrc_status='Active',cohort=?,cohort_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?''',(row['full_name'],department_name,row['department_id'],row['course'],(int(row['semester_id'])+1)//2,row['email'],row['mobile'],row['batch'],cohort_id,student_id))
+                else:
+                    student_id=conn.execute('''INSERT INTO students(register_no,name,department,department_id,department_verification,class_name,year,email,phone,yrc_status,cohort,cohort_id,cohort_verification)
+                        VALUES(?,?,?,?,'verified',?,?,?,?,'Active',?,?,'pending')''',(row['register_no'],row['full_name'],department_name,row['department_id'],row['course'],(int(row['semester_id'])+1)//2,row['email'],row['mobile'],row['batch'],cohort_id)).lastrowid
+                conn.execute('INSERT INTO student_accounts(student_id,password_hash,session_token) VALUES(?,?,?)',(student_id,row['password_hash'],secrets.token_urlsafe(32)))
+                conn.execute('UPDATE volunteer_applications SET status=\'APPROVED\',student_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(student_id,application_id))
+                conn.execute('INSERT INTO volunteer_application_history(application_id,actor_admin_id,action,note) VALUES(?,?,\'APPROVED\',?)',(application_id,session['admin_id'],note))
+                conn.commit()
+                try: registration_email(row['email'],'Your KJU YRC volunteer application is approved',f'Congratulations {row["full_name"]}. Your volunteer account is active. Sign in at {url_for("volunteer_page",_external=True)} using your registration number and chosen password.')
+                except (RuntimeError,OSError,smtplib.SMTPException): pass
+                flash('Application approved and volunteer account activated.','success')
+            except Exception as exc:
+                conn.rollback(); flash(str(exc) if isinstance(exc,ValueError) else 'Could not approve this application.','error')
+    elif action=='reject':
+        if not note: flash('Enter a reason for rejection.','error')
+        else:
+            conn.execute("UPDATE volunteer_applications SET status='REJECTED',rejection_reason=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(note,application_id))
+            conn.execute("INSERT INTO volunteer_application_history(application_id,actor_admin_id,action,note) VALUES(?,?,'REJECTED',?)",(application_id,session['admin_id'],note)); conn.commit()
+            try: registration_email(row['email'],'Update on your KJU YRC application',f'Your application was not approved at this time. Reason: {note}')
+            except (RuntimeError,OSError,smtplib.SMTPException): pass
+            flash('Application rejected and the decision recorded.','success')
+    elif action=='reconsider' and row['status']=='REJECTED':
+        conn.execute("UPDATE volunteer_applications SET status='PENDING_APPROVAL',rejection_reason='',updated_at=CURRENT_TIMESTAMP WHERE id=?",(application_id,))
+        conn.execute("INSERT INTO volunteer_application_history(application_id,actor_admin_id,action,note) VALUES(?,?,'RECONSIDERED',?)",(application_id,session['admin_id'],note)); conn.commit(); flash('Application returned to the review queue.','success')
+    return redirect(url_for('registration_management'))
+
+@app.post('/registrations/settings')
+@central_admin_required
+def registration_settings_update():
+    conn=db(); opened=1 if request.form.get('is_open')=='1' else 0
+    opens=request.form.get('opens_at','').replace('T',' '); closes=request.form.get('closes_at','').replace('T',' ')
+    conn.execute('UPDATE volunteer_registration_settings SET is_open=?,opens_at=?,closes_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=1',(opened,opens or None,closes or None)); conn.commit()
+    audit('Registration window updated','registration_settings',1,'',{'is_open':opened}); conn.commit(); flash('Registration settings saved.','success')
+    return redirect(url_for('registration_management'))
+
+@app.get('/registrations/export.csv')
+@registration_manager_required
+def registration_export():
+    args=[]; where=''
+    if g.admin['role']=='department_admin': where=' WHERE a.department_id IN ('+','.join('?' for _ in g.admin_department_ids)+')'; args=list(g.admin_department_ids)
+    rows=db().execute('SELECT a.register_no,a.full_name,a.email,a.mobile,d.name department,s.name semester,a.batch,a.status,a.created_at FROM volunteer_applications a JOIN departments d ON d.id=a.department_id JOIN semesters s ON s.id=a.semester_id'+where+' ORDER BY a.created_at DESC',args).fetchall()
+    out=io.StringIO(); writer=csv.writer(out); writer.writerow(['Register number','Name','Email','Mobile','Department','Semester','Batch','Status','Applied at'])
+    writer.writerows([("'"+str(row[k]) if isinstance(row[k],str) and row[k].lstrip().startswith(('=','+','-','@')) else row[k] for k in ('register_no','full_name','email','mobile','department','semester','batch','status','created_at')) for row in rows])
+    return Response('\ufeff'+out.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=yrc-registrations.csv'})
 
 @app.get('/admins')
 @central_admin_required

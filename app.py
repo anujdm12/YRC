@@ -291,6 +291,9 @@ def set_admin_password(username, password):
 @app.before_request
 def csrf_protect():
     if request.method == 'POST':
+        # Public application tracking is read-only; it does not change server state.
+        if request.endpoint == 'volunteer_track':
+            return None
         expected=session.get('_csrf_token','')
         supplied=request.form.get('_csrf_token','')
         if not expected or not secrets.compare_digest(expected,supplied):
